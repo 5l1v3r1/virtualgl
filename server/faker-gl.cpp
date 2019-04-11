@@ -18,6 +18,7 @@
 #include "ContextHash.h"
 #include "WindowHash.h"
 #include "faker.h"
+#include "vglwrap.h"
 
 using namespace vglfaker;
 using namespace vglserver;
@@ -25,13 +26,14 @@ using namespace vglserver;
 
 static void doGLReadback(bool spoilLast, bool sync)
 {
-	GLXDrawable drawable = _glXGetCurrentDrawable();
+	VirtualWin *vw;  GLXDrawable drawable;
+
+	drawable = VGLGetCurrentDrawable();
 	if(!drawable) return;
 
-	VirtualWin *vw;
 	if((vw = winhash.find(NULL, drawable)) != NULL)
 	{
-		if(DrawingToFront() || vw->dirty)
+		if(vw->drawingToFront() || vw->dirty)
 		{
 				OPENTRACE(doGLReadback);  PRARGX(vw->getGLXDrawable());
 				PRARGI(sync);  PRARGI(spoilLast);  STARTTRACE();
@@ -110,6 +112,33 @@ void glXWaitGL(void)
 }
 
 
+void glBindFramebuffer(GLenum target, GLuint framebuffer)
+{
+	if(vglfaker::getExcludeCurrent())
+	{
+		_glBindFramebuffer(target, framebuffer);  return;
+	}
+
+	TRY();
+
+		OPENTRACE(glBindFramebuffer);  PRARGX(target);  PRARGI(framebuffer);
+		STARTTRACE();
+
+	VirtualWin *vw;
+	GLXDrawable drawable = VGLGetCurrentDrawable();
+	GLuint fbo = 0;
+
+	if(drawable && (vw = winhash.find(NULL, drawable)) != NULL && fconfig.egl
+		&& framebuffer == 0 && (fbo = vw->getFBO()) != 0)
+		_glBindFramebuffer(target, fbo);
+	else _glBindFramebuffer(target, framebuffer);
+
+		STOPTRACE();  CLOSETRACE();
+
+	CATCH();
+}
+
+
 // If the application is rendering to the front buffer and switches the draw
 // buffer before calling glFlush()/glFinish()/glXWaitGL(), we set a lazy
 // readback trigger to indicate that the front buffer needs to be read back
@@ -125,15 +154,15 @@ void glDrawBuffer(GLenum mode)
 
 	VirtualWin *vw;
 	int before = -1, after = -1, rbefore = -1, rafter = -1;
-	GLXDrawable drawable = _glXGetCurrentDrawable();
+	GLXDrawable drawable = VGLGetCurrentDrawable();
 
 	if(drawable && (vw = winhash.find(NULL, drawable)) != NULL)
 	{
-		before = DrawingToFront();
-		rbefore = DrawingToRight();
-		_glDrawBuffer(mode);
-		after = DrawingToFront();
-		rafter = DrawingToRight();
+		before = vw->drawingToFront();
+		rbefore = vw->drawingToRight();
+		vw->setDrawBuffer(mode);
+		after = vw->drawingToFront();
+		rafter = vw->drawingToRight();
 		if(before && !after) vw->dirty = true;
 		if(rbefore && !rafter && vw->isStereo()) vw->rdirty = true;
 	}
@@ -261,15 +290,15 @@ void glPopAttrib(void)
 
 	VirtualWin *vw;
 	int before = -1, after = -1, rbefore = -1, rafter = -1;
-	GLXDrawable drawable = _glXGetCurrentDrawable();
+	GLXDrawable drawable = VGLGetCurrentDrawable();
 
 	if(drawable && (vw = winhash.find(NULL, drawable)) != NULL)
 	{
-		before = DrawingToFront();
-		rbefore = DrawingToRight();
+		before = vw->drawingToFront();
+		rbefore = vw->drawingToRight();
 		_glPopAttrib();
-		after = DrawingToFront();
-		rafter = DrawingToRight();
+		after = vw->drawingToFront();
+		rafter = vw->drawingToRight();
 		if(before && !after) vw->dirty = true;
 		if(rbefore && !rafter && vw->isStereo()) vw->rdirty = true;
 	}
@@ -280,6 +309,28 @@ void glPopAttrib(void)
 		{
 			PRARGI(vw->dirty);  PRARGI(vw->rdirty);  PRARGX(vw->getGLXDrawable());
 		}
+		CLOSETRACE();
+
+	CATCH();
+}
+
+
+void glReadBuffer(GLenum mode)
+{
+	if(vglfaker::getExcludeCurrent()) { _glReadBuffer(mode);  return; }
+
+	TRY();
+
+		OPENTRACE(glReadBuffer);  PRARGX(mode);  STARTTRACE();
+
+	VirtualWin *vw;
+	GLXDrawable drawable = VGLGetCurrentDrawable();
+
+	if(drawable && (vw = winhash.find(NULL, drawable)) != NULL)
+		vw->setReadBuffer(mode);
+	else _glReadBuffer(mode);
+
+		STOPTRACE();  if(drawable && vw) PRARGX(vw->getGLXDrawable());
 		CLOSETRACE();
 
 	CATCH();
@@ -302,10 +353,10 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 		OPENTRACE(glViewport);  PRARGI(x);  PRARGI(y);  PRARGI(width);
 		PRARGI(height);  STARTTRACE();
 
-	GLXContext ctx = _glXGetCurrentContext();
-	GLXDrawable draw = _glXGetCurrentDrawable();
-	GLXDrawable read = _glXGetCurrentReadDrawable();
-	Display *dpy = _glXGetCurrentDisplay();
+	GLXContext ctx = VGLGetCurrentContext();
+	GLXDrawable draw = VGLGetCurrentDrawable();
+	GLXDrawable read = VGLGetCurrentReadDrawable();
+	Display *dpy = glXGetCurrentDisplay();
 	GLXDrawable newRead = 0, newDraw = 0;
 
 	if(dpy && (draw || read) && ctx)
@@ -319,7 +370,7 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 		if(readVW) newRead = readVW->updateGLXDrawable();
 		if(newRead != read || newDraw != draw)
 		{
-			_glXMakeContextCurrent(dpy, newDraw, newRead, ctx);
+			VGLMakeCurrent(dpy, newDraw, newRead, ctx);
 			if(drawVW) { drawVW->clear();  drawVW->cleanup(); }
 			if(readVW) readVW->cleanup();
 		}

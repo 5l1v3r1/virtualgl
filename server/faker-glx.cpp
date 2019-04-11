@@ -56,18 +56,6 @@ static INLINE VGLFBConfig matchConfig(Display *dpy, XVisualInfo *vis)
 }
 
 
-// If GLXDrawable is a window ID, then return the ID for its corresponding
-// off-screen drawable (if applicable.)
-
-GLXDrawable ServerDrawable(Display *dpy, GLXDrawable draw)
-{
-	VirtualWin *vw;
-	if((vw = winhash.find(dpy, draw)) != NULL)
-		return vw->getGLXDrawable();
-	else return draw;
-}
-
-
 void setWMAtom(Display *dpy, Window win, VirtualWin *vw)
 {
 	Atom *protocols = NULL, *newProtocols = NULL;  int count = 0;
@@ -279,6 +267,8 @@ void glXCopyContext(Display *dpy, GLXContext src, GLXContext dst,
 	if(IS_EXCLUDED(dpy))
 		return _glXCopyContext(dpy, src, dst, mask);
 
+	// TODO: Is there a way to implement this with EGL?
+	if(fconfig.egl) THROW("glXCopyContext() requires GLX mode");
 	_glXCopyContext(DPY3D, src, dst, mask);
 
 	CATCH();
@@ -304,14 +294,13 @@ GLXContext glXCreateContext(Display *dpy, XVisualInfo *vis,
 
 	if(!(config = matchConfig(dpy, vis)))
 	{
-		vglfaker::sendGLXError(X_GLXCreateContext, BadValue, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreateContext, BadValue, true);
 		goto done;
 	}
-	ctx = _glXCreateNewContext(DPY3D, GLXFBC(config), GLX_RGBA_TYPE, share_list,
-		direct);
+	ctx = VGLCreateContext(dpy, config, share_list, direct, NULL);
 	if(ctx)
 	{
-		int newctxIsDirect = _glXIsDirect(DPY3D, ctx);
+		int newctxIsDirect = VGLIsDirect(ctx);
 		if(!newctxIsDirect && direct)
 		{
 			vglout.println("[VGL] WARNING: The OpenGL rendering context obtained on X display");
@@ -352,16 +341,10 @@ GLXContext glXCreateContextAttribsARB(Display *dpy, GLXFBConfig config_,
 		PRARGX(share_context);  PRARGI(direct);  PRARGAL13(attribs);
 		STARTTRACE();
 
-	CHECKSYM_NONFATAL(glXCreateContextAttribsARB)
-	if((!attribs || attribs[0] == None) && !__glXCreateContextAttribsARB)
-		ctx = _glXCreateNewContext(DPY3D, GLXFBC(config), GLX_RGBA_TYPE,
-			share_context, direct);
-	else
-		ctx = _glXCreateContextAttribsARB(DPY3D, GLXFBC(config), share_context,
-			direct, attribs);
+	ctx = VGLCreateContext(dpy, config, share_context, direct, attribs);
 	if(ctx)
 	{
-		int newctxIsDirect = _glXIsDirect(DPY3D, ctx);
+		int newctxIsDirect = VGLIsDirect(ctx);
 		if(!newctxIsDirect && direct)
 		{
 			vglout.println("[VGL] WARNING: The OpenGL rendering context obtained on X display");
@@ -397,11 +380,10 @@ GLXContext glXCreateNewContext(Display *dpy, GLXFBConfig config_,
 		OPENTRACE(glXCreateNewContext);  PRARGD(dpy);  PRARGC(config);
 		PRARGI(render_type);  PRARGX(share_list);  PRARGI(direct);  STARTTRACE();
 
-	ctx = _glXCreateNewContext(DPY3D, GLXFBC(config), GLX_RGBA_TYPE, share_list,
-		direct);
+	ctx = VGLCreateContext(dpy, config, share_list, direct, NULL);
 	if(ctx)
 	{
-		int newctxIsDirect = _glXIsDirect(DPY3D, ctx);
+		int newctxIsDirect = VGLIsDirect(ctx);
 		if(!newctxIsDirect && direct)
 		{
 			vglout.println("[VGL] WARNING: The OpenGL rendering context obtained on X display");
@@ -450,8 +432,8 @@ GLXPbuffer glXCreatePbuffer(Display *dpy, GLXFBConfig config_,
 		OPENTRACE(glXCreatePbuffer);  PRARGD(dpy);  PRARGC(config);
 		PRARGAL13(attrib_list);  STARTTRACE();
 
-	pb = _glXCreatePbuffer(DPY3D, GLXFBC(config), attrib_list);
-	if(dpy && pb) glxdhash.add(pb, dpy);
+	pb = VGLCreatePbuffer(dpy, config, attrib_list);
+	if(dpy && pb) glxdhash.add(pb, dpy, config);
 
 		STOPTRACE();  PRARGX(pb);  CLOSETRACE();
 
@@ -498,13 +480,13 @@ GLXPixmap glXCreateGLXPixmap(Display *dpy, XVisualInfo *vis, Pixmap pm)
 	Window root;  unsigned int bw;
 	if(!(config = matchConfig(dpy, vis)))
 	{
-		vglfaker::sendGLXError(X_GLXCreateGLXPixmap, BadValue, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreateGLXPixmap, BadValue, true);
 		goto done;
 	}
 	if(!pm
 		|| !_XGetGeometry(dpy, pm, &root, &x, &y, &width, &height, &bw, &depth))
 	{
-		vglfaker::sendGLXError(X_GLXCreateGLXPixmap, BadPixmap, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreateGLXPixmap, BadPixmap, true);
 		goto done;
 	}
 	if((vpm = new VirtualPixmap(dpy, vis->visual, pm)) != NULL)
@@ -513,7 +495,7 @@ GLXPixmap glXCreateGLXPixmap(Display *dpy, XVisualInfo *vis, Pixmap pm)
 		// display handle to the 3D pixmap.
 		vpm->init(width, height, depth, config, NULL);
 		pmhash.add(dpy, pm, vpm);
-		glxdhash.add(vpm->getGLXDrawable(), dpy);
+		glxdhash.add(vpm->getGLXDrawable(), dpy, config);
 		drawable = vpm->getGLXDrawable();
 	}
 
@@ -544,20 +526,20 @@ GLXPixmap glXCreatePixmap(Display *dpy, GLXFBConfig config_, Pixmap pm,
 
 	if(!config)
 	{
-		vglfaker::sendGLXError(X_GLXCreatePixmap, GLXBadFBConfig, false);
+		vglfaker::sendGLXError(dpy, X_GLXCreatePixmap, GLXBadFBConfig, false);
 		goto done;
 	}
 	Window root;  int x, y;  unsigned int w, h, bw, d;
 	if(!pm
 		|| !_XGetGeometry(dpy, pm, &root, &x, &y, &w, &h, &bw, &d))
 	{
-		vglfaker::sendGLXError(X_GLXCreatePixmap, BadPixmap, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreatePixmap, BadPixmap, true);
 		goto done;
 	}
 
 	if(!config->visualID)
 	{
-		vglfaker::sendGLXError(X_GLXCreatePixmap, BadMatch, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreatePixmap, BadMatch, true);
 		goto done;
 	}
 	if((vis = glxvisual::visualFromID(dpy, config->screen,
@@ -570,7 +552,7 @@ GLXPixmap glXCreatePixmap(Display *dpy, GLXFBConfig config_, Pixmap pm,
 	{
 		vpm->init(w, h, d, config, attribs);
 		pmhash.add(dpy, pm, vpm);
-		glxdhash.add(vpm->getGLXDrawable(), dpy);
+		glxdhash.add(vpm->getGLXDrawable(), dpy, config);
 		drawable = vpm->getGLXDrawable();
 	}
 
@@ -609,13 +591,13 @@ GLXWindow glXCreateWindow(Display *dpy, GLXFBConfig config_, Window win,
 	XSync(dpy, False);
 	if(!config)
 	{
-		vglfaker::sendGLXError(X_GLXCreateWindow, GLXBadFBConfig, false);
+		vglfaker::sendGLXError(dpy, X_GLXCreateWindow, GLXBadFBConfig, false);
 		win = 0;
 		goto done;
 	}
 	if(!win)
 	{
-		vglfaker::sendGLXError(X_GLXCreateWindow, BadWindow, true);
+		vglfaker::sendGLXError(dpy, X_GLXCreateWindow, BadWindow, true);
 		goto done;
 	}
 	try
@@ -633,7 +615,7 @@ GLXWindow glXCreateWindow(Display *dpy, GLXFBConfig config_, Window win,
 		if(!strcmp(GET_METHOD(e), "VirtualWin")
 			&& !strcmp(e.what(), "Invalid window"))
 		{
-			vglfaker::sendGLXError(X_GLXCreateWindow, BadWindow, true);
+			vglfaker::sendGLXError(dpy, X_GLXCreateWindow, BadWindow, true);
 			win = 0;
 			goto done;
 		}
@@ -666,7 +648,7 @@ void glXDestroyContext(Display *dpy, GLXContext ctx)
 		OPENTRACE(glXDestroyContext);  PRARGD(dpy);  PRARGX(ctx);  STARTTRACE();
 
 	ctxhash.remove(ctx);
-	_glXDestroyContext(DPY3D, ctx);
+	VGLDestroyContext(dpy, ctx);
 
 		STOPTRACE();  CLOSETRACE();
 
@@ -685,7 +667,7 @@ void glXDestroyPbuffer(Display *dpy, GLXPbuffer pbuf)
 
 		OPENTRACE(glXDestroyPbuffer);  PRARGD(dpy);  PRARGX(pbuf);  STARTTRACE();
 
-	_glXDestroyPbuffer(DPY3D, pbuf);
+	VGLDestroyPbuffer(dpy, pbuf);
 	if(pbuf) glxdhash.remove(pbuf);
 
 		STOPTRACE();  CLOSETRACE();
@@ -781,6 +763,8 @@ void glXFreeContextEXT(Display *dpy, GLXContext ctx)
 	{
 		_glXFreeContextEXT(dpy, ctx);  return;
 	}
+
+	if(fconfig.egl) THROW("glXFreeContextEXT() requires GLX mode");
 	_glXFreeContextEXT(DPY3D, ctx);
 
 	CATCH();
@@ -797,20 +781,23 @@ static char glxextensions[1024] = VGL_GLX_EXTENSIONS;
 
 static const char *getGLXExtensions(void)
 {
-	const char *realGLXExtensions =
+	const char *realGLXExtensions = fconfig.egl ? "" :
 		_glXQueryExtensionsString(DPY3D, DefaultScreen(DPY3D));
 
-	CHECKSYM_NONFATAL(glXCreateContextAttribsARB)
-	if(__glXCreateContextAttribsARB
+	if(!fconfig.egl) CHECKSYM_NONFATAL(glXCreateContextAttribsARB)
+	if((fconfig.egl || __glXCreateContextAttribsARB)
 		&& !strstr(glxextensions, "GLX_ARB_create_context"))
 		strncat(glxextensions,
 			" GLX_ARB_create_context GLX_ARB_create_context_profile",
 			1023 - strlen(glxextensions));
 
-	if(strstr(realGLXExtensions, "GLX_ARB_create_context_robustness")
+	if((fconfig.egl
+			|| strstr(realGLXExtensions, "GLX_ARB_create_context_robustness"))
 		&& !strstr(glxextensions, "GLX_ARB_create_context_robustness"))
 		strncat(glxextensions, " GLX_ARB_create_context_robustness",
 			1023 - strlen(glxextensions));
+
+	if(!fconfig.egl) return glxextensions;
 
 	if(strstr(realGLXExtensions, "GLX_ARB_fbconfig_float")
 		&& !strstr(glxextensions, "GLX_ARB_fbconfig_float"))
@@ -904,11 +891,12 @@ int glXGetConfig(Display *dpy, XVisualInfo *vis, int attrib, int *value)
 		}
 		else if(attrib == GLX_RGBA)
 		{
-			if((glxvisual::visAttrib3D(config, GLX_RENDER_TYPE) & GLX_RGBA_BIT) != 0)
+			if((glxvisual::getFBConfigAttrib(dpy, config,
+				GLX_RENDER_TYPE) & GLX_RGBA_BIT) != 0)
 				*value = 1;
 			else *value = 0;
 		}
-		else retval = _glXGetFBConfigAttrib(DPY3D, GLXFBC(config), attrib, value);
+		else retval = VGLGetFBConfigAttrib(dpy, config, attrib, value);
 	}
 	else
 	{
@@ -939,7 +927,7 @@ Display *glXGetCurrentDisplay(void)
 
 		OPENTRACE(glXGetCurrentDisplay);  STARTTRACE();
 
-	GLXDrawable curdraw = _glXGetCurrentDrawable();
+	GLXDrawable curdraw = VGLGetCurrentDrawable();
 	if((vw = winhash.find(NULL, curdraw)) != NULL)
 		dpy = vw->getX11Display();
 	else if(curdraw)
@@ -958,14 +946,15 @@ Display *glXGetCurrentDisplay(void)
 
 GLXDrawable glXGetCurrentDrawable(void)
 {
-	VirtualWin *vw;  GLXDrawable draw = _glXGetCurrentDrawable();
+	VirtualWin *vw;  GLXDrawable draw = 0;
 
-	if(vglfaker::getExcludeCurrent()) return draw;
+	if(vglfaker::getExcludeCurrent()) return _glXGetCurrentDrawable();
 
 	TRY();
 
 		OPENTRACE(glXGetCurrentDrawable);  STARTTRACE();
 
+	draw = VGLGetCurrentDrawable();
 	if((vw = winhash.find(NULL, draw)) != NULL)
 		draw = vw->getX11Drawable();
 
@@ -977,14 +966,15 @@ GLXDrawable glXGetCurrentDrawable(void)
 
 GLXDrawable glXGetCurrentReadDrawable(void)
 {
-	VirtualWin *vw;  GLXDrawable read = _glXGetCurrentReadDrawable();
+	VirtualWin *vw;  GLXDrawable read = 0;
 
-	if(vglfaker::getExcludeCurrent()) return read;
+	if(vglfaker::getExcludeCurrent()) return _glXGetCurrentReadDrawable();
 
 	TRY();
 
 		OPENTRACE(glXGetCurrentReadDrawable);  STARTTRACE();
 
+	read = VGLGetCurrentReadDrawable();
 	if((vw = winhash.find(NULL, read)) != NULL)
 		read = vw->getX11Drawable();
 
@@ -1029,20 +1019,21 @@ int glXGetFBConfigAttrib(Display *dpy, GLXFBConfig config_, int attribute,
 		retval = GLX_BAD_VALUE;  goto done;
 	}
 
-	retval = _glXGetFBConfigAttrib(DPY3D, GLXFBC(config), attribute, value);
-
 	// If there is a corresponding 2D X server visual attached to this FB config,
 	// then that means it was obtained via glXChooseFBConfig(), and we can
 	// return attributes that take into account the interaction between visuals
 	// on the 2D X Server and FB Configs on the 3D X Server.
-	if(config->visualID != 0 && attribute == GLX_VISUAL_ID)
+	if(attribute == GLX_VISUAL_ID)
 		*value = config->visualID;
+	else
+		retval = VGLGetFBConfigAttrib(dpy, config, attribute, value);
 
-	if(attribute == GLX_DRAWABLE_TYPE && retval == Success)
+	if(!fconfig.egl && attribute == GLX_DRAWABLE_TYPE && retval == Success)
 	{
 		int temp = *value;
 		*value = 0;
-		if(glxvisual::visAttrib3D(config, GLX_VISUAL_ID) != 0 && config->visualID)
+		if(glxvisual::getFBConfigAttrib(dpy, config, GLX_VISUAL_ID) != 0
+			&& config->visualID)
 		{
 			if((fconfig.drawable == RRDRAWABLE_PBUFFER && temp & GLX_PBUFFER_BIT)
 				|| (fconfig.drawable == RRDRAWABLE_PIXMAP && temp & GLX_WINDOW_BIT
@@ -1123,6 +1114,9 @@ void glXBindTexImageEXT(Display *dpy, GLXDrawable drawable, int buffer,
 	if(IS_EXCLUDED(dpy))
 		return _glXBindTexImageEXT(dpy, drawable, buffer, attrib_list);
 
+	// TODO: Is there a way to implement this with EGL?
+	if(fconfig.egl) THROW("glXBindTexImageEXT() requires GLX mode");
+
 		OPENTRACE(glXBindTexImageEXT);  PRARGD(dpy);  PRARGX(drawable);
 		PRARGI(buffer);  PRARGAL13(attrib_list);  STARTTRACE();
 
@@ -1131,7 +1125,7 @@ void glXBindTexImageEXT(Display *dpy, GLXDrawable drawable, int buffer,
 	{
 		// If we get here, then the drawable wasn't created with
 		// glXCreate[GLX]Pixmap().
-		vglfaker::sendGLXError(X_GLXVendorPrivate, GLXBadPixmap, false);
+		vglfaker::sendGLXError(dpy, X_GLXVendorPrivate, GLXBadPixmap, false);
 		goto done;
 	}
 	else
@@ -1146,7 +1140,7 @@ void glXBindTexImageEXT(Display *dpy, GLXDrawable drawable, int buffer,
 				vpm->getWidth(), vpm->getHeight());
 		else
 		{
-			vglfaker::sendGLXError(X_GLXVendorPrivate, GLXBadPixmap, false);
+			vglfaker::sendGLXError(dpy, X_GLXVendorPrivate, GLXBadPixmap, false);
 			goto done;
 		}
 		if(gc) XFreeGC(DPY3D, gc);
@@ -1168,6 +1162,9 @@ void glXReleaseTexImageEXT(Display *dpy, GLXDrawable drawable, int buffer)
 
 	if(IS_EXCLUDED(dpy))
 		return _glXReleaseTexImageEXT(dpy, drawable, buffer);
+
+	// TODO: Is there a way to implement this with EGL?
+	if(fconfig.egl) THROW("glXReleaseTexImageEXT() requires GLX mode");
 
 		OPENTRACE(glXReleaseTexImageEXT);  PRARGD(dpy);  PRARGX(drawable);
 		PRARGI(buffer);  STARTTRACE();
@@ -1347,7 +1344,16 @@ void glXGetSelectedEvent(Display *dpy, GLXDrawable draw,
 	if(IS_EXCLUDED(dpy))
 		return _glXGetSelectedEvent(dpy, draw, event_mask);
 
-	_glXGetSelectedEvent(DPY3D, ServerDrawable(dpy, draw), event_mask);
+	if(!event_mask) return;
+
+	VirtualWin *vw;
+	if((vw = winhash.find(dpy, draw)) != NULL)
+		*event_mask = vw->getEventMask();
+	else if(glxdhash.getCurrentDisplay(draw))
+		*event_mask = glxdhash.getEventMask(draw);
+	else
+		vglfaker::sendGLXError(dpy, X_GLXGetDrawableAttributes, GLXBadDrawable,
+			false);
 
 	CATCH();
 }
@@ -1404,6 +1410,7 @@ GLXContext glXImportContextEXT(Display *dpy, GLXContextID contextID)
 	if(IS_EXCLUDED(dpy))
 		return _glXImportContextEXT(dpy, contextID);
 
+	if(fconfig.egl) THROW("glXImportContextEXT() requires GLX mode");
 	return _glXImportContextEXT(DPY3D, contextID);
 
 	CATCH();
@@ -1425,7 +1432,7 @@ Bool glXIsDirect(Display *dpy, GLXContext ctx)
 		OPENTRACE(glXIsDirect);  PRARGD(dpy);  PRARGX(ctx);
 		STARTTRACE();
 
-	direct = _glXIsDirect(DPY3D, ctx);
+	direct = VGLIsDirect(ctx);
 
 		STOPTRACE();  PRARGI(direct);  CLOSETRACE();
 
@@ -1461,15 +1468,15 @@ Bool glXMakeCurrent(Display *dpy, GLXDrawable drawable, GLXContext ctx)
 
 	// glXMakeCurrent() implies a glFinish() on the previous context, which is
 	// why we read back the front buffer here if it is dirty.
-	GLXDrawable curdraw = _glXGetCurrentDrawable();
-	if(_glXGetCurrentContext() && _glXGetCurrentDisplay() == DPY3D
-		&& curdraw && (vw = winhash.find(NULL, curdraw)) != NULL)
+	GLXDrawable curdraw = VGLGetCurrentDrawable();
+	if(VGLGetCurrentContext() && curdraw
+		&& (vw = winhash.find(NULL, curdraw)) != NULL)
 	{
 		VirtualWin *newvw;
 		if(drawable == 0 || !(newvw = winhash.find(dpy, drawable))
 			|| newvw->getGLXDrawable() != curdraw)
 		{
-			if(DrawingToFront() || vw->dirty)
+			if(vw->drawingToFront() || vw->dirty)
 				vw->readback(GL_FRONT, false, fconfig.sync);
 		}
 	}
@@ -1511,7 +1518,7 @@ Bool glXMakeCurrent(Display *dpy, GLXDrawable drawable, GLXContext ctx)
 			if(!strcmp(GET_METHOD(e), "VirtualWin")
 				&& !strcmp(e.what(), "Invalid window"))
 			{
-				vglfaker::sendGLXError(X_GLXMakeCurrent, GLXBadDrawable, false);
+				vglfaker::sendGLXError(dpy, X_GLXMakeCurrent, GLXBadDrawable, false);
 				goto done;
 			}
 			throw;
@@ -1522,11 +1529,11 @@ Bool glXMakeCurrent(Display *dpy, GLXDrawable drawable, GLXContext ctx)
 		// This situation would cause _glXMakeContextCurrent() to trigger an X11
 		// error anyhow, but the error it triggers is implementation-dependent.
 		// It's better to provide consistent behavior to the calling program.
-		vglfaker::sendGLXError(X_GLXMakeCurrent, GLXBadContext, false);
+		vglfaker::sendGLXError(dpy, X_GLXMakeCurrent, GLXBadContext, false);
 		goto done;
 	}
 
-	retval = _glXMakeContextCurrent(DPY3D, drawable, drawable, ctx);
+	retval = VGLMakeCurrent(dpy, drawable, drawable, ctx);
 	if(fconfig.trace && retval)
 		renderer = (const char *)_glGetString(GL_RENDERER);
 	// The pixels in a new off-screen drawable are undefined, so we have to clear
@@ -1534,12 +1541,14 @@ Bool glXMakeCurrent(Display *dpy, GLXDrawable drawable, GLXContext ctx)
 	if((vw = winhash.find(NULL, drawable)) != NULL)
 	{
 		vw->clear();  vw->cleanup();
+		if(fconfig.egl) vw->makeCurrent(true, true);
 	}
 	VirtualPixmap *vpm;
 	if((vpm = pmhash.find(dpy, drawable)) != NULL)
 	{
 		vpm->clear();
 		vpm->setDirect(direct);
+		if(fconfig.egl) vpm->makeCurrent(true, true);
 	}
 
 	done:
@@ -1575,15 +1584,15 @@ Bool glXMakeContextCurrent(Display *dpy, GLXDrawable draw, GLXDrawable read,
 
 	// glXMakeContextCurrent() implies a glFinish() on the previous context,
 	// which is why we read back the front buffer here if it is dirty.
-	GLXDrawable curdraw = _glXGetCurrentDrawable();
-	if(_glXGetCurrentContext() && _glXGetCurrentDisplay() == DPY3D && curdraw
+	GLXDrawable curdraw = VGLGetCurrentDrawable();
+	if(VGLGetCurrentContext() && curdraw
 		&& (vw = winhash.find(NULL, curdraw)) != NULL)
 	{
 		VirtualWin *newvw;
 		if(draw == 0 || !(newvw = winhash.find(dpy, draw))
 			|| newvw->getGLXDrawable() != curdraw)
 		{
-			if(DrawingToFront() || vw->dirty)
+			if(vw->drawingToFront() || vw->dirty)
 				vw->readback(GL_FRONT, false, fconfig.sync);
 		}
 	}
@@ -1652,7 +1661,7 @@ Bool glXMakeContextCurrent(Display *dpy, GLXDrawable draw, GLXDrawable read,
 			if(!strcmp(GET_METHOD(e), "VirtualWin")
 				&& !strcmp(e.what(), "Invalid window"))
 			{
-				vglfaker::sendGLXError(X_GLXMakeContextCurrent, GLXBadDrawable,
+				vglfaker::sendGLXError(dpy, X_GLXMakeContextCurrent, GLXBadDrawable,
 					false);
 				goto done;
 			}
@@ -1664,24 +1673,33 @@ Bool glXMakeContextCurrent(Display *dpy, GLXDrawable draw, GLXDrawable read,
 		// This situation would cause _glXMakeContextCurrent() to trigger an X11
 		// error anyhow, but the error it triggers is implementation-dependent.
 		// It's better to provide consistent behavior to the calling program.
-		vglfaker::sendGLXError(X_GLXMakeContextCurrent, GLXBadContext, false);
+		vglfaker::sendGLXError(dpy, X_GLXMakeContextCurrent, GLXBadContext, false);
 		goto done;
 	}
 
-	retval = _glXMakeContextCurrent(DPY3D, draw, read, ctx);
+	retval = VGLMakeCurrent(dpy, draw, read, ctx);
 	if(fconfig.trace && retval)
 		renderer = (const char *)_glGetString(GL_RENDERER);
 	if((drawVW = winhash.find(NULL, draw)) != NULL)
 	{
 		drawVW->clear();  drawVW->cleanup();
+		if(fconfig.egl) drawVW->makeCurrent(true, false);
 	}
 	if((readVW = winhash.find(NULL, read)) != NULL)
+	{
 		readVW->cleanup();
+		if(fconfig.egl) readVW->makeCurrent(false, true);
+	}
 	VirtualPixmap *vpm;
 	if((vpm = pmhash.find(dpy, draw)) != NULL)
 	{
 		vpm->clear();
 		vpm->setDirect(direct);
+		if(fconfig.egl) vpm->makeCurrent(true, false);
+	}
+	if((vpm = pmhash.find(dpy, read)) != NULL)
+	{
+		if(fconfig.egl) vpm->makeCurrent(false, true);
 	}
 
 	done:
@@ -1704,7 +1722,8 @@ Bool glXMakeCurrentReadSGI(Display *dpy, GLXDrawable draw, GLXDrawable read,
 
 int glXQueryContext(Display *dpy, GLXContext ctx, int attribute, int *value)
 {
-	int retval = 0;
+	int retval = Success;
+	VGLFBConfig config;
 
 	TRY();
 
@@ -1714,16 +1733,37 @@ int glXQueryContext(Display *dpy, GLXContext ctx, int attribute, int *value)
 		OPENTRACE(glXQueryContext);  PRARGD(dpy);  PRARGX(ctx);
 		PRARGIX(attribute);  STARTTRACE();
 
-	VGLFBConfig config;
-
 	if(ctx && attribute == GLX_SCREEN && value
 		&& (config = ctxhash.findConfig(ctx)) != NULL)
 	{
 		*value = config->screen;
-		retval = Success;
+		goto done;
+	}
+
+	if(fconfig.egl)
+	{
+		if(!ctx || !(config = ctxhash.findConfig(ctx)))
+		{
+			vglfaker::sendGLXError(dpy, X_GLXQueryContext, GLXBadContext, false);
+			goto done;
+		}
+		switch(attribute)
+		{
+			case GLX_FBCONFIG_ID:
+				*value = config->id;
+				retval = Success;
+				break;
+			case GLX_RENDER_TYPE:
+				*value = GLX_RGBA_TYPE;
+				retval = Success;
+				break;
+			default:
+				retval = GLX_BAD_ATTRIBUTE;
+		}
 	}
 	else retval = _glXQueryContext(DPY3D, ctx, attribute, value);
 
+	done:
 		STOPTRACE();  if(value) PRARGIX(*value);  CLOSETRACE();
 
 	CATCH();
@@ -1745,6 +1785,8 @@ int glXQueryContextInfoEXT(Display *dpy, GLXContext ctx, int attribute,
 		PRARGIX(attribute);  STARTTRACE();
 
 	VGLFBConfig config;
+
+	if(fconfig.egl) THROW("glXQueryContextInfoEXT() requires GLX mode");
 
 	if(ctx && attribute == GLX_SCREEN_EXT && value
 		&& (config = ctxhash.findConfig(ctx)) != NULL)
@@ -1774,6 +1816,8 @@ int glXQueryContextInfoEXT(Display *dpy, GLXContext ctx, int attribute,
 void glXQueryDrawable(Display *dpy, GLXDrawable draw, int attribute,
 	unsigned int *value)
 {
+	GLXDrawable glxDraw = draw;
+
 	TRY();
 
 	if(IS_EXCLUDED(dpy))
@@ -1785,8 +1829,10 @@ void glXQueryDrawable(Display *dpy, GLXDrawable draw, int attribute,
 		OPENTRACE(glXQueryDrawable);  PRARGD(dpy);  PRARGX(draw);
 		PRARGIX(attribute);  STARTTRACE();
 
+	if(!value) goto done;
+
 	// GLX_EXT_swap_control attributes
-	if(attribute == GLX_SWAP_INTERVAL_EXT && value)
+	if(attribute == GLX_SWAP_INTERVAL_EXT)
 	{
 		VirtualWin *vw;
 		if((vw = winhash.find(dpy, draw)) != NULL)
@@ -1795,16 +1841,67 @@ void glXQueryDrawable(Display *dpy, GLXDrawable draw, int attribute,
 			*value = 0;
 		goto done;
 	}
-	else if(attribute == GLX_MAX_SWAP_INTERVAL_EXT && value)
+	else if(attribute == GLX_MAX_SWAP_INTERVAL_EXT)
 	{
 		*value = VGL_MAX_SWAP_INTERVAL;
 		goto done;
 	}
+	else
+	{
+		VirtualWin *vw;  VirtualPixmap *vpm;
+		int fbcid = -1;
 
-	_glXQueryDrawable(DPY3D, ServerDrawable(dpy, draw), attribute, value);
+		if((vw = winhash.find(dpy, draw)) != NULL)
+		{
+			fbcid = vw->getFBConfigID();
+			glxDraw = vw->getGLXDrawable();
+		}
+		else if((vpm = pmhash.find(dpy, draw)) != NULL)
+		{
+			fbcid = vpm->getFBConfigID();
+			glxDraw = vpm->getGLXDrawable();
+		}
+		else if(glxdhash.getCurrentDisplay(draw))
+			fbcid = FBCID(glxdhash.getFBConfig(draw));
+		else
+		{
+			vglfaker::sendGLXError(dpy, X_GLXGetDrawableAttributes, GLXBadDrawable,
+				false);
+			goto done;
+		}
+
+		if(fconfig.egl)
+		{
+			switch(attribute)
+			{
+				case GLX_WIDTH:  attribute = EGL_WIDTH;  break;
+				case GLX_HEIGHT:  attribute = EGL_HEIGHT;  break;
+				case GLX_PRESERVED_CONTENTS:
+					*value = 1;
+					return;
+				case GLX_LARGEST_PBUFFER:  attribute = EGL_LARGEST_PBUFFER;  break;
+				case GLX_FBCONFIG_ID:
+					if(fbcid >= 0) *value = fbcid;
+					return;
+				default:
+					return;
+			}
+			// TODO: I don't think all of these eglBindAPI() calls are really
+			// necessary.  I added them because I kept getting OpenGL ES contexts and
+			// couldn't figure out why.
+			if(!_eglBindAPI(EGL_OPENGL_API))
+				THROW("Could not enable OpenGL API");
+			EGLint eglValue;
+			if(!_eglQuerySurface((EGLDisplay)DPY3D, (EGLSurface)glxDraw, attribute,
+				&eglValue))
+				CheckEGLErrors(dpy, X_GLXGetDrawableAttributes);
+			*value = eglValue;
+		}
+		else _glXQueryDrawable(DPY3D, glxDraw, attribute, value);
+	}
 
 	done:
-		STOPTRACE();  PRARGX(ServerDrawable(dpy, draw));
+		STOPTRACE();  PRARGX(draw);
 		if(value) { PRARGIX(*value); }  else { PRARGX(value); }
 		CLOSETRACE();
 
@@ -1828,7 +1925,8 @@ Bool glXQueryExtension(Display *dpy, int *error_base, int *event_base)
 	if(IS_EXCLUDED(dpy))
 		return _glXQueryExtension(dpy, error_base, event_base);
 
-	return _glXQueryExtension(DPY3D, error_base, event_base);
+	int dummy;
+	return VGLQueryExtension(dpy, &dummy, event_base, error_base);
 
 	CATCH();
 	return False;
@@ -1893,15 +1991,15 @@ Bool glXQueryVersion(Display *dpy, int *major, int *minor)
 }
 
 
-// Hand off to the 3D X server without modification.  NOTE: Since this is
-// passed through to the 3D X server, any GLXPbufferClobberEvent that is
-// generated will have an incorrect draw_type field (if draw is a GLXWindow)
-// and display field.  However, the number of applications that use this
-// function seems to be approximately zero, because the reasons behind it
-// (Pbuffer clobbering due to a resource conflict) are not generally valid with
-// modern systems.  As a for instance, Mesa doesn't seem to generate
-// GLXPbufferClobberEvents at all, and nVidia's implementation of this function
-// appears to be a no-op.
+// Modern GLX implementations don't seem to do anything meaningful with this
+// function.  Mesa stores the event mask so that it can be retrieved by
+// glXGetSelectedEvent(), but it never actually throws a
+// GLXPbufferClobberEvent.  nVidia's implementation doesn't even store the
+// event mask; it appears to be just a no-op.  The number of applications that
+// use this function seems to be approximately zero, because the reasons behind
+// it (Pbuffer clobbering due to a resource conflict) are not generally valid
+// with modern systems.  However, we emulate Mesa's behavior in the interest of
+// conformance.
 
 void glXSelectEvent(Display *dpy, GLXDrawable draw, unsigned long event_mask)
 {
@@ -1910,7 +2008,16 @@ void glXSelectEvent(Display *dpy, GLXDrawable draw, unsigned long event_mask)
 	if(IS_EXCLUDED(dpy))
 		return _glXSelectEvent(dpy, draw, event_mask);
 
-	_glXSelectEvent(DPY3D, ServerDrawable(dpy, draw), event_mask);
+	event_mask &= GLX_PBUFFER_CLOBBER_MASK;
+
+	VirtualWin *vw;
+	if((vw = winhash.find(dpy, draw)) != NULL)
+		vw->setEventMask(event_mask);
+	else if(glxdhash.getCurrentDisplay(draw))
+		glxdhash.setEventMask(draw, event_mask);
+	else
+		vglfaker::sendGLXError(dpy, X_GLXChangeDrawableAttributes, GLXBadDrawable,
+			false);
 
 	CATCH();
 }
@@ -2025,7 +2132,7 @@ int glXSwapIntervalSGI(int interval)
 
 	TRY();
 
-	VirtualWin *vw;  GLXDrawable draw = _glXGetCurrentDrawable();
+	VirtualWin *vw;  GLXDrawable draw = VGLGetCurrentDrawable();
 	if(interval < 0) retval = GLX_BAD_VALUE;
 	else if(!draw || !(vw = winhash.find(NULL, draw)))
 		retval = GLX_BAD_CONTEXT;

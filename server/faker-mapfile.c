@@ -90,11 +90,13 @@
 		/* OpenGL */
 		glFinish;
 		glFlush;
+		glBindFramebuffer;
 		glDrawBuffer;
 		glDrawBuffers;
 		glGetString;
 		glGetStringi;
 		glPopAttrib;
+		glReadBuffer;
 		glViewport;
 
 		/* OpenCL */

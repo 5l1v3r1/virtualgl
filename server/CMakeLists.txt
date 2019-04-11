@@ -84,7 +84,8 @@ set(FAKER_SOURCES
 	WindowHash.cpp
 	X11Trans.cpp
 	vglconfigLauncher.cpp
-	VGLTrans.cpp)
+	VGLTrans.cpp
+	vglwrap.cpp)
 if(VGL_USEXV)
 	set(FAKER_SOURCES ${FAKER_SOURCES};XVTrans.cpp)
 endif()
@@ -122,7 +123,8 @@ foreach(fakerlib ${FAKERLIBS})
 	target_link_libraries(${fakerlib} vglcommon ${FBXFAKERLIB} vglsocket m
 		${LIBDL})
 	if(${fakerlib} STREQUAL ${VGL_FAKER_NAME})
-		target_link_libraries(${fakerlib} ${OPENGL_gl_LIBRARY})
+		target_link_libraries(${fakerlib} ${OPENGL_gl_LIBRARY}
+			${OPENGL_egl_LIBRARY})
 	endif()
 	if(${fakerlib} STREQUAL ${VGL_FAKER_NAME}-opencl)
 		target_link_libraries(${fakerlib} ${OPENGL_gl_LIBRARY} ${OpenCL_LIBRARIES})

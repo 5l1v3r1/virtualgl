@@ -324,6 +324,8 @@ void fconfig_reloadenv(void)
 			strncpy(fconfig.localdpystring, env, MAXSTR - 1);
 			strncpy(fconfig_env.localdpystring, env, MAXSTR - 1);
 		}
+		if((env[0] == '/' || !strnicmp(env, "EGL", 3)))
+			fconfig.egl = true;
 	}
 	FETCHENV_BOOL("VGL_DLSYM", dlsymloader);
 	if((env = getenv("VGL_DRAWABLE")) != NULL && strlen(env) > 0)
@@ -340,6 +342,7 @@ void fconfig_reloadenv(void)
 		if(drawable >= 0 && (!fconfig_envset || fconfig_env.drawable != drawable))
 			fconfig.drawable = fconfig_env.drawable = drawable;
 	}
+	FETCHENV_STR("VGL_EGLLIB", egllib);
 	FETCHENV_STR("VGL_EXCLUDE", excludeddpys);
 	#ifdef FAKEXCB
 	FETCHENV_BOOL("VGL_FAKEXCB", fakeXCB);
@@ -601,6 +604,8 @@ void fconfig_print(FakerConfig &fc)
 	PRCONF_STR(defaultfbconfig);
 	PRCONF_INT(dlsymloader);
 	PRCONF_INT(drawable);
+	PRCONF_INT(egl);
+	PRCONF_STR(egllib);
 	PRCONF_STR(excludeddpys);
 	PRCONF_DBL(fps);
 	PRCONF_DBL(flushdelay);

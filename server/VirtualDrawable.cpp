@@ -68,18 +68,25 @@ static Window create_window(Display *dpy, XVisualInfo *vis, int width,
 
 // Pbuffer constructor
 
-VirtualDrawable::OGLDrawable::OGLDrawable(int width_, int height_,
-	VGLFBConfig config_) : cleared(false), stereo(false), glxDraw(0),
-	width(width_), height(height_), depth(0), config(config_), glFormat(0),
-	pm(0), win(0), isPixmap(false)
+VirtualDrawable::OGLDrawable::OGLDrawable(Display *dpy_, int width_,
+	int height_, VGLFBConfig config_) : cleared(false), stereo(false),
+	doubleBuffer(false), glxDraw(0), fbo(0), rbod(0), dpy(dpy_), width(width_),
+	height(height_), depth(0), config(config_), glFormat(0), pm(0), win(0),
+	isPixmap(false)
 {
+	for(int i = 0; i < 4; i++) rboc[i] = 0;
+
 	if(!config_ || width_ < 1 || height_ < 1) THROW("Invalid argument");
 
 	int pbattribs[] = { GLX_PBUFFER_WIDTH, 0, GLX_PBUFFER_HEIGHT, 0,
 		GLX_PRESERVED_CONTENTS, True, None };
 
-	pbattribs[1] = width;  pbattribs[3] = height;
-	glxDraw = _glXCreatePbuffer(DPY3D, GLXFBC(config), pbattribs);
+	// In EGL mode, we create a dummy Pbuffer just so we have something to which
+	// to bind the FBO.
+	// TODO: glXQueryDrawable() should return the W/H of FBO, not of Pbuffer
+	pbattribs[1] = fconfig.egl ? 1 : width;
+	pbattribs[3] = fconfig.egl ? 1 : height;
+	glxDraw = VGLCreatePbuffer(dpy, config, pbattribs);
 	if(!glxDraw) THROW("Could not create Pbuffer");
 
 	setVisAttribs();
@@ -119,12 +126,13 @@ VirtualDrawable::OGLDrawable::OGLDrawable(int width_, int height_, int depth_,
 
 void VirtualDrawable::OGLDrawable::setVisAttribs(void)
 {
-	if(glxvisual::visAttrib3D(config, GLX_STEREO))
+	if(glxvisual::getFBConfigAttrib(dpy, config, GLX_STEREO))
 		stereo = true;
-	rgbSize = glxvisual::visAttrib3D(config, GLX_RED_SIZE) +
-		glxvisual::visAttrib3D(config, GLX_GREEN_SIZE) +
-		glxvisual::visAttrib3D(config, GLX_BLUE_SIZE);
-	int pixelsize = rgbSize + glxvisual::visAttrib3D(config, GLX_ALPHA_SIZE);
+	rgbSize = glxvisual::getFBConfigAttrib(dpy, config, GLX_RED_SIZE) +
+		glxvisual::getFBConfigAttrib(dpy, config, GLX_GREEN_SIZE) +
+		glxvisual::getFBConfigAttrib(dpy, config, GLX_BLUE_SIZE);
+	int pixelsize = rgbSize +
+		glxvisual::getFBConfigAttrib(dpy, config, GLX_ALPHA_SIZE);
 
 	if(pixelsize == 32)
 	{
@@ -153,15 +161,90 @@ VirtualDrawable::OGLDrawable::~OGLDrawable(void)
 	}
 	else
 	{
-		_glXDestroyPbuffer(DPY3D, glxDraw);
+		VGLDestroyPbuffer(DPY3D, glxDraw);
 		glxDraw = 0;
+		if(fconfig.egl)
+		{
+			if(rbod) { _glDeleteRenderbuffers(1, &rbod);  rbod = 0; }
+			for(int i = 0; i < 4; i++)
+			{
+				if(rboc[i]) { _glDeleteRenderbuffers(1, &rboc[i]);  rboc[i] = 0; }
+			}
+			if(fbo) { _glDeleteFramebuffers(1, &fbo);  fbo = 0; }
+		}
 	}
 }
 
 
-XVisualInfo *VirtualDrawable::OGLDrawable::getVisual(void)
+void VirtualDrawable::OGLDrawable::createBuffers(void)
 {
-	return _glXGetVisualFromFBConfig(DPY3D, GLXFBC(config));
+	int nFrontBackBuffers = (!!config->attr.doubleBuffer + 1),
+		nLeftRightBuffers = (!!config->attr.stereo + 1),
+		nBuffers = nFrontBackBuffers * nLeftRightBuffers, maxBuffers;
+	_glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxBuffers);
+	if(nBuffers > maxBuffers)
+		THROW("GL_MAX_COLOR_ATTACHMENTS is not large enough");
+
+	int oldReadFBO = 0, oldDrawFBO = 0;
+	_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldReadFBO);
+	_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDrawFBO);
+
+	if(!fbo) _glGenFramebuffers(1, &fbo);
+	_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	CHECKGL("bind FBO");
+
+	// 0 = front left, 1 = back left, 2 = front right, 3 = back right
+	for(int i = 0; i < 2 * (!!config->attr.stereo + 1);
+		i += (1 - !!config->attr.doubleBuffer + 1))
+	{
+		if(!rboc[i])
+		{
+			_glGenRenderbuffers(1, &rboc[i]);
+			_glBindRenderbuffer(GL_RENDERBUFFER, rboc[i]);
+			GLenum rboFormat = config->attr.redSize == 10 ?
+				(config->attr.alphaSize ? GL_RGB10_A2 : GL_RGB10) :
+				(config->attr.alphaSize ? GL_RGBA8 : GL_RGB8);
+			if(config->attr.samples > 1)
+				_glRenderbufferStorageMultisample(GL_RENDERBUFFER,
+					config->attr.samples, rboFormat, width, height);
+			else
+				_glRenderbufferStorage(GL_RENDERBUFFER, rboFormat, width, height);
+			_glBindRenderbuffer(GL_RENDERBUFFER, 0);
+			CHECKGL("allocate color RBO storage");
+		}
+		else _glBindRenderbuffer(GL_RENDERBUFFER, rboc[i]);
+		_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i,
+			GL_RENDERBUFFER, rboc[i]);
+		CHECKGL("attach color RBO to FBO");
+	}
+	if(config->attr.depthSize)
+	{
+		if(!rbod)
+		{
+			_glGenRenderbuffers(1, &rbod);
+			_glBindRenderbuffer(GL_RENDERBUFFER, rbod);
+			GLenum rboFormat = config->attr.stencilSize ?
+				GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24;
+			if(config->attr.samples > 1)
+				_glRenderbufferStorageMultisample(GL_RENDERBUFFER,
+					config->attr.samples, rboFormat, width, height);
+			else
+				_glRenderbufferStorage(GL_RENDERBUFFER, rboFormat, width, height);
+			_glBindRenderbuffer(GL_RENDERBUFFER, 0);
+			CHECKGL("allocate depth RBO storage");
+		}
+		else _glBindRenderbuffer(GL_RENDERBUFFER, rbod);
+		_glFramebufferRenderbuffer(GL_FRAMEBUFFER, config->attr.stencilSize ?
+			GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+			rbod);
+		CHECKGL("attach depth RBO to FBO");
+	}
+	if(_glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		THROW("FBO is not complete");
+
+	_glBindFramebuffer(GL_READ_FRAMEBUFFER, oldReadFBO);
+	_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDrawFBO);
+	CHECKGL("restore FBO/RBO bindings");
 }
 
 
@@ -179,7 +262,211 @@ void VirtualDrawable::OGLDrawable::clear(void)
 
 void VirtualDrawable::OGLDrawable::swap(void)
 {
-	_glXSwapBuffers(DPY3D, glxDraw);
+	if(fconfig.egl)
+	{
+		if(!fbo) return;
+
+		if(rboc[0] && rboc[1])
+		{
+			GLuint temp = rboc[1];
+			rboc[1] = rboc[0];
+			rboc[0] = temp;
+		}
+		if(rboc[2] && rboc[3])
+		{
+			GLuint temp = rboc[3];
+			rboc[3] = rboc[2];
+			rboc[2] = temp;
+		}
+
+		int oldReadFBO = 0, oldDrawFBO = 0;
+		_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldReadFBO);
+		_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDrawFBO);
+
+		_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+		CHECKGL("bind FBO");
+
+		// 0 = front left, 1 = back left, 2 = front right, 3 = back right
+		for(int i = 0; i < 2 * (!!config->attr.stereo + 1);
+			i += (1 - !!config->attr.doubleBuffer + 1))
+		{
+			_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i,
+				GL_RENDERBUFFER, rboc[i]);
+			CHECKGL("attach color RBO to FBO");
+		}
+		if(_glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+			THROW("FBO is not complete");
+
+		_glBindFramebuffer(GL_READ_FRAMEBUFFER, oldReadFBO);
+		_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDrawFBO);
+	}
+	else _glXSwapBuffers(DPY3D, glxDraw);
+}
+
+
+void VirtualDrawable::OGLDrawable::makeCurrent(bool draw, bool read)
+{
+	if(fconfig.egl && (draw || read))
+	{
+		if(fbo)
+		{
+			_glDeleteFramebuffers(1, &fbo);  fbo = 0;
+		}
+		createBuffers();
+		if(draw)
+		{
+			_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			CHECKGL("bind draw FBO");
+			setDrawBuffer(rboc[1] ? GL_BACK : GL_FRONT);
+		}
+		if(read)
+		{
+			_glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+			CHECKGL("bind read FBO");
+			setReadBuffer(rboc[1] ? GL_BACK : GL_FRONT);
+		}
+	}
+}
+
+
+bool VirtualDrawable::OGLDrawable::drawingToFront(void)
+{
+	if(fconfig.egl)
+	{
+		GLint currentFBO = 0;
+		_glGetIntegerv(GL_FRAMEBUFFER_BINDING, &currentFBO);
+		if((GLuint)currentFBO != fbo) return false;
+
+		GLint drawbuf0 = GL_COLOR_ATTACHMENT1, drawbuf1 = GL_COLOR_ATTACHMENT1;
+		_glGetIntegerv(GL_DRAW_BUFFER0, &drawbuf0);
+		if(rboc[2]) _glGetIntegerv(GL_DRAW_BUFFER1, &drawbuf1);
+
+		return (drawbuf0 == GL_COLOR_ATTACHMENT0
+			|| drawbuf0 == GL_COLOR_ATTACHMENT2 || drawbuf1 == GL_COLOR_ATTACHMENT0
+			|| drawbuf1 == GL_COLOR_ATTACHMENT2);
+	}
+	else
+	{
+		GLint drawbuf = GL_BACK;
+		_glGetIntegerv(GL_DRAW_BUFFER, &drawbuf);
+
+		return (drawbuf == GL_FRONT || drawbuf == GL_FRONT_AND_BACK
+			|| drawbuf == GL_FRONT_LEFT || drawbuf == GL_FRONT_RIGHT
+			|| drawbuf == GL_LEFT || drawbuf == GL_RIGHT);
+	}
+}
+
+
+bool VirtualDrawable::OGLDrawable::drawingToRight(void)
+{
+	if(fconfig.egl)
+	{
+		GLint currentFBO = 0;
+		_glGetIntegerv(GL_FRAMEBUFFER_BINDING, &currentFBO);
+		if((GLuint)currentFBO != fbo) return false;
+
+		GLint drawbuf0 = GL_COLOR_ATTACHMENT0, drawbuf1 = GL_COLOR_ATTACHMENT0;
+		_glGetIntegerv(GL_DRAW_BUFFER0, &drawbuf0);
+		if(rboc[3]) _glGetIntegerv(GL_DRAW_BUFFER1, &drawbuf1);
+
+		return (drawbuf0 == GL_COLOR_ATTACHMENT2
+			|| drawbuf0 == GL_COLOR_ATTACHMENT3 || drawbuf1 == GL_COLOR_ATTACHMENT2
+			|| drawbuf1 == GL_COLOR_ATTACHMENT3);
+	}
+	else
+	{
+		GLint drawbuf = GL_LEFT;
+		_glGetIntegerv(GL_DRAW_BUFFER, &drawbuf);
+
+		return (drawbuf == GL_RIGHT || drawbuf == GL_FRONT_RIGHT
+			|| drawbuf == GL_BACK_RIGHT);
+	}
+}
+
+
+void VirtualDrawable::OGLDrawable::setDrawBuffer(GLenum mode)
+{
+	GLenum bufs[4] = { GL_NONE, GL_NONE, GL_NONE, GL_NONE };
+	GLenum nBuffers = 0;
+
+	if(fconfig.egl)
+	{
+		GLint currentFBO = 0;
+		_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentFBO);
+		if((GLuint)currentFBO != fbo) return;
+
+		switch(mode)
+		{
+			case GL_FRONT_LEFT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT0;
+				break;
+			case GL_BACK_LEFT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT1;
+				break;
+			case GL_FRONT_RIGHT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT2;
+				break;
+			case GL_BACK_RIGHT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT3;
+				break;
+			case GL_FRONT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT0;
+				if(rboc[2]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT2;
+				break;
+			case GL_BACK:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT1;
+				if(rboc[3]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT3;
+				break;
+			case GL_LEFT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT0;
+				if(rboc[1]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT1;
+				break;
+			case GL_RIGHT:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT2;
+				if(rboc[3]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT3;
+				break;
+			case GL_FRONT_AND_BACK:
+				bufs[nBuffers++] = GL_COLOR_ATTACHMENT0;
+				if(rboc[1]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT1;
+				if(rboc[2]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT2;
+				if(rboc[3]) bufs[nBuffers++] = GL_COLOR_ATTACHMENT3;
+				break;
+		}
+	}
+	if(nBuffers) _glDrawBuffers(nBuffers, bufs);
+	else _glDrawBuffer(mode);
+}
+
+
+void VirtualDrawable::OGLDrawable::setReadBuffer(GLenum mode)
+{
+	if(fconfig.egl)
+	{
+		GLint currentFBO = 0;
+		_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &currentFBO);
+		if((GLuint)currentFBO != fbo) return;
+
+		switch(mode)
+		{
+			case GL_FRONT:
+			case GL_LEFT:
+			case GL_FRONT_LEFT:
+				mode = GL_COLOR_ATTACHMENT0;
+				break;
+			case GL_BACK:
+			case GL_BACK_LEFT:
+				mode = GL_COLOR_ATTACHMENT1;
+				break;
+			case GL_RIGHT:
+			case GL_FRONT_RIGHT:
+				mode = GL_COLOR_ATTACHMENT2;
+				break;
+			case GL_BACK_RIGHT:
+				mode = GL_COLOR_ATTACHMENT3;
+				break;
+		}
+	}
+	_glReadBuffer(mode);
 }
 
 
@@ -203,6 +490,7 @@ VirtualDrawable::VirtualDrawable(Display *dpy_, Drawable x11Draw_)
 	usePBO = (fconfig.readback == RRREAD_PBO);
 	alreadyPrinted = alreadyWarned = alreadyWarnedRenderMode = false;
 	ext = NULL;
+	eventMask = 0;
 }
 
 
@@ -210,41 +498,23 @@ VirtualDrawable::~VirtualDrawable(void)
 {
 	mutex.lock(false);
 	delete oglDraw;  oglDraw = NULL;
-	if(ctx) { _glXDestroyContext(DPY3D, ctx);  ctx = 0; }
+	if(ctx) { VGLDestroyContext(dpy, ctx);  ctx = 0; }
 	mutex.unlock(false);
 }
 
 
 int VirtualDrawable::init(int width, int height, VGLFBConfig config_)
 {
-	static bool alreadyPrintedDrawableType = false;
 	if(!config_ || width < 1 || height < 1) THROW("Invalid argument");
 
 	CriticalSection::SafeLock l(mutex);
 	if(oglDraw && oglDraw->getWidth() == width && oglDraw->getHeight() == height
-		&& FBCID(oglDraw->getConfig()) == FBCID(config_))
+		&& FBCID(oglDraw->getFBConfig()) == FBCID(config_))
 		return 0;
-	if(fconfig.drawable == RRDRAWABLE_PIXMAP)
-	{
-		if(!alreadyPrintedDrawableType && fconfig.verbose)
-		{
-			vglout.println("[VGL] Using Pixmaps for rendering");
-			alreadyPrintedDrawableType = true;
-		}
-		oglDraw = new OGLDrawable(width, height, 0, config_, NULL);
-	}
-	else
-	{
-		if(!alreadyPrintedDrawableType && fconfig.verbose)
-		{
-			vglout.println("[VGL] Using Pbuffers for rendering");
-			alreadyPrintedDrawableType = true;
-		}
-		oglDraw = new OGLDrawable(width, height, config_);
-	}
+	oglDraw = new OGLDrawable(dpy, width, height, config_);
 	if(config && FBCID(config_) != FBCID(config) && ctx)
 	{
-		_glXDestroyContext(DPY3D, ctx);  ctx = 0;
+		VGLDestroyContext(dpy, ctx);  ctx = 0;
 	}
 	config = config_;
 	return 1;
@@ -256,7 +526,7 @@ void VirtualDrawable::setDirect(Bool direct_)
 	if(direct_ != True && direct_ != False) return;
 	if(direct_ != direct && ctx)
 	{
-		_glXDestroyContext(DPY3D, ctx);  ctx = 0;
+		VGLDestroyContext(dpy, ctx);  ctx = 0;
 	}
 	direct = direct_;
 }
@@ -277,6 +547,14 @@ GLXDrawable VirtualDrawable::getGLXDrawable(void)
 	CriticalSection::SafeLock l(mutex);
 	if(oglDraw) retval = oglDraw->getGLXDrawable();
 	return retval;
+}
+
+
+int VirtualDrawable::getFBConfigID(void)
+{
+	CriticalSection::SafeLock l(mutex);
+	if(oglDraw) return FBCID(oglDraw->getFBConfig());
+	return 0;
 }
 
 
@@ -335,8 +613,8 @@ void VirtualDrawable::readPixels(GLint x, GLint y, GLint width, GLint pitch,
 	}
 	lastFormat = currentFormat;
 
-	GLXDrawable read = _glXGetCurrentDrawable();
-	GLXDrawable draw = _glXGetCurrentDrawable();
+	GLXDrawable read = VGLGetCurrentDrawable();
+	GLXDrawable draw = VGLGetCurrentDrawable();
 	if(read == 0 || readBuf == GL_BACK) read = getGLXDrawable();
 	if(draw == 0 || readBuf == GL_BACK) draw = getGLXDrawable();
 
@@ -370,13 +648,12 @@ void VirtualDrawable::readPixels(GLint x, GLint y, GLint width, GLint pitch,
 	{
 		if(!isInit())
 			THROW("VirtualDrawable instance has not been fully initialized");
-		if((ctx = _glXCreateNewContext(DPY3D, GLXFBC(config), GLX_RGBA_TYPE, NULL,
-			direct)) == 0)
+		if((ctx = VGLCreateContext(dpy, config, NULL, direct, NULL)) == 0)
 			THROW("Could not create OpenGL context for readback");
 	}
-	TempContext tc(DPY3D, draw, read, ctx, config, GLX_RGBA_TYPE);
+	TempContext tc(dpy, draw, read, ctx, config);
 
-	_glReadBuffer(readBuf);
+	oglDraw->setReadBuffer(readBuf);
 
 	if(pitch % 8 == 0) _glPixelStorei(GL_PACK_ALIGNMENT, 8);
 	else if(pitch % 4 == 0) _glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -510,14 +787,15 @@ void VirtualDrawable::copyPixels(GLint srcX, GLint srcY, GLint width,
 	{
 		if(!isInit())
 			THROW("VirtualDrawable instance has not been fully initialized");
-		if((ctx = _glXCreateNewContext(DPY3D, GLXFBC(config), GLX_RGBA_TYPE, NULL,
-			direct)) == 0)
+		if((ctx = VGLCreateContext(dpy, config, NULL, direct, NULL)) == 0)
 			THROW("Could not create OpenGL context for readback");
 	}
-	TempContext tc(DPY3D, draw, getGLXDrawable(), ctx, config, GLX_RGBA_TYPE);
+	TempContext tc(dpy, draw, getGLXDrawable(), ctx, config);
 
-	_glReadBuffer(GL_FRONT);
-	_glDrawBuffer(GL_FRONT_AND_BACK);
+	if(!oglDraw)
+		THROW("VirtualDrawable instance has not been fully initialized");
+	oglDraw->setReadBuffer(GL_FRONT);
+	oglDraw->setDrawBuffer(GL_FRONT_AND_BACK);
 
 	_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	_glPixelStorei(GL_PACK_ALIGNMENT, 1);

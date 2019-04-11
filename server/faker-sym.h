@@ -19,6 +19,9 @@
 #define GL_GLEXT_PROTOTYPES
 #define GLX_GLXEXT_PROTOTYPES
 #include <GL/glx.h>
+#include <EGL/egl.h>
+#define EGL_EGLEXT_PROTOTYPES
+#include <EGL/eglext.h>
 #ifdef FAKEOPENCL
 #include <CL/opencl.h>
 #endif
@@ -518,6 +521,9 @@ VFUNCDEF0(glFinish, glFinish)
 
 VFUNCDEF0(glFlush, glFlush)
 
+VFUNCDEF2(glBindFramebuffer, GLenum, target, GLuint, framebuffer,
+	glBindFramebuffer)
+
 VFUNCDEF1(glDrawBuffer, GLenum, drawbuf, glDrawBuffer)
 
 VFUNCDEF2(glDrawBuffers, GLsizei, n, const GLenum *, bufs, glDrawBuffers)
@@ -528,6 +534,8 @@ FUNCDEF2(const GLubyte *, glGetStringi, GLenum, name, GLuint, index,
 	glGetStringi)
 
 VFUNCDEF0(glPopAttrib, glPopAttrib)
+
+VFUNCDEF1(glReadBuffer, GLenum, mode, glReadBuffer)
 
 VFUNCDEF4(glViewport, GLint, x, GLint, y, GLsizei, width, GLsizei, height,
 	glViewport)
@@ -662,12 +670,16 @@ FUNCDEF1(xcb_generic_event_t *, xcb_wait_for_event, xcb_connection_t *, conn,
 
 VFUNCDEF2(glBindBuffer, GLenum, target, GLuint, buffer, NULL)
 
+VFUNCDEF2(glBindRenderbuffer, GLenum, target, GLuint, renderbuffer, NULL)
+
 VFUNCDEF7(glBitmap, GLsizei, width, GLsizei, height, GLfloat, xorig,
 	GLfloat, yorig, GLfloat, xmove, GLfloat, ymove, const GLubyte *, bitmap,
 	NULL)
 
 VFUNCDEF4(glBufferData, GLenum, target, GLsizeiptr, size, const GLvoid *, data,
 	GLenum, usage, NULL)
+
+FUNCDEF1(GLenum, glCheckFramebufferStatus, GLenum, target, NULL)
 
 VFUNCDEF1(glClear, GLbitfield, mask, NULL)
 
@@ -677,9 +689,24 @@ VFUNCDEF4(glClearColor, GLclampf, red, GLclampf, green, GLclampf, blue,
 VFUNCDEF5(glCopyPixels, GLint, x, GLint, y, GLsizei, width, GLsizei, height,
 	GLenum, type, NULL)
 
+VFUNCDEF2(glDeleteFramebuffers, GLsizei, n, const GLuint *, framebuffers,
+	NULL);
+
+VFUNCDEF2(glDeleteRenderbuffers, GLsizei, n, const GLuint *, renderbuffers,
+	NULL)
+
+VFUNCDEF2(glDrawBuffers, GLsizei, n, GLenum *, bufs, NULL)
+
 VFUNCDEF0(glEndList, NULL)
 
+VFUNCDEF4(glFramebufferRenderbuffer, GLenum, target, GLenum, attachment,
+	GLenum, renderbuffertarget, GLuint, renderbuffer, NULL)
+
 VFUNCDEF2(glGenBuffers, GLsizei, n, GLuint *, buffers, NULL)
+
+VFUNCDEF2(glGenFramebuffers, GLsizei, n, GLuint *, ids, NULL)
+
+VFUNCDEF2(glGenRenderbuffers, GLsizei, n, GLuint *, renderbuffers, NULL)
 
 VFUNCDEF3(glGetBufferParameteriv, GLenum, target, GLenum, value, GLint *, data,
 	NULL)
@@ -714,9 +741,73 @@ VFUNCDEF1(glReadBuffer, GLenum, mode, NULL)
 VFUNCDEF7(glReadPixels, GLint, x, GLint, y, GLsizei, width, GLsizei, height,
 	GLenum, format, GLenum, type, GLvoid *, pixels, NULL)
 
+VFUNCDEF4(glRenderbufferStorage, GLenum, target, GLenum, internalformat,
+	GLsizei, width, GLsizei, height, NULL)
+
+VFUNCDEF5(glRenderbufferStorageMultisample, GLenum, target, GLsizei, samples,
+	GLenum, internalformat, GLsizei, width, GLsizei, height, NULL)
+
 FUNCDEF1(GLboolean, glUnmapBuffer, GLenum, target, NULL)
 
 FUNCDEF0(GLXContext, glXGetCurrentContext, NULL)
+
+// EGL functions used by the faker (but not interposed.)
+
+FUNCDEF1(EGLBoolean, eglBindAPI, EGLenum, api, NULL)
+
+FUNCDEF5(EGLBoolean, eglChooseConfig, EGLDisplay, display,
+	EGLint const *, attrib_list, EGLConfig *, configs, EGLint, config_size,
+	EGLint *, num_config, NULL)
+
+FUNCDEF4(EGLContext, eglCreateContext, EGLDisplay, display, EGLConfig, config,
+	EGLContext, share_context, EGLint const *, attrib_list, NULL)
+
+FUNCDEF3(EGLSurface, eglCreatePbufferSurface, EGLDisplay, display,
+	EGLConfig, config, EGLint const *, attrib_list, NULL)
+
+FUNCDEF2(EGLBoolean, eglDestroyContext, EGLDisplay, display,
+	EGLContext, context, NULL)
+
+FUNCDEF2(EGLBoolean, eglDestroySurface, EGLDisplay, display,
+	EGLSurface, surface, NULL)
+
+FUNCDEF4(EGLBoolean, eglGetConfigAttrib, EGLDisplay, display,
+	EGLConfig, config, EGLint, attribute, EGLint *, value, NULL)
+
+FUNCDEF0(EGLContext, eglGetCurrentContext, NULL)
+
+FUNCDEF1(EGLSurface, eglGetCurrentSurface, EGLint, readdraw, NULL)
+
+FUNCDEF0(EGLint, eglGetError, NULL)
+
+FUNCDEF3(EGLDisplay, eglGetPlatformDisplayEXT, EGLenum, platform, void *,
+	native_display, const EGLint *, attrib_list, NULL)
+
+typedef void (*(*_eglGetProcAddressType)(const char *))(void);
+SYMDEF(eglGetProcAddress);
+static INLINE void (*_eglGetProcAddress(const char *procName))(void)
+{
+	CHECKSYM(eglGetProcAddress, NULL);
+	return __eglGetProcAddress(procName);
+}
+
+FUNCDEF3(EGLBoolean, eglInitialize, EGLDisplay, display, EGLint *, major,
+	EGLint *, minor, NULL)
+
+FUNCDEF4(EGLBoolean, eglMakeCurrent, EGLDisplay, display, EGLSurface, draw,
+	EGLSurface, read, EGLContext, context, NULL)
+
+FUNCDEF3(EGLBoolean, eglQueryDevicesEXT, EGLint, max_devices, EGLDeviceEXT *,
+	devices, EGLint *, num_devices, NULL)
+
+FUNCDEF2(const char *, eglQueryDeviceStringEXT, EGLDeviceEXT, device, EGLint,
+	name, NULL)
+
+FUNCDEF2(char const *, eglQueryString, EGLDisplay, display, EGLint, name,
+	NULL)
+
+FUNCDEF4(EGLBoolean, eglQuerySurface, EGLDisplay, display, EGLSurface,
+	surface, EGLint, attribute, EGLint *, value, NULL)
 
 // We load all XCB functions dynamically, so that the same VirtualGL binary
 // can be used to support systems with and without XCB libraries.

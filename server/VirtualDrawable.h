@@ -1,6 +1,6 @@
 // Copyright (C)2004 Landmark Graphics Corporation
 // Copyright (C)2005 Sun Microsystems, Inc.
-// Copyright (C)2009-2015, 2017-2018 D. R. Commander
+// Copyright (C)2009-2015, 2017-2019 D. R. Commander
 //
 // This library is free software and may be redistributed and/or modified under
 // the terms of the wxWindows Library License, Version 3.1 or (at your option)
@@ -36,11 +36,40 @@ namespace vglserver
 			Display *getX11Display(void);
 			Drawable getX11Drawable(void);
 			GLXDrawable getGLXDrawable(void);
+			int getFBConfigID(void);
 			void copyPixels(GLint srcX, GLint srcY, GLint width, GLint height,
 				GLint destX, GLint destY, GLXDrawable draw);
 			int getWidth(void) { return oglDraw ? oglDraw->getWidth() : -1; }
 			int getHeight(void) { return oglDraw ? oglDraw->getHeight() : -1; }
+			GLuint getFBO(void) { return oglDraw ? oglDraw->getFBO() : 0; }
 			bool isInit(void) { return direct == True || direct == False; }
+			void setEventMask(unsigned long mask) { eventMask = mask; }
+			unsigned long getEventMask(void) { return eventMask; }
+
+			void makeCurrent(bool draw, bool read)
+			{
+				if(oglDraw) oglDraw->makeCurrent(draw, read);
+			}
+
+			bool drawingToFront(void)
+			{
+				return oglDraw ? oglDraw->drawingToFront() : false;
+			}
+
+			bool drawingToRight(void)
+			{
+				return oglDraw ? oglDraw->drawingToRight() : false;
+			}
+
+			void setDrawBuffer(GLenum mode)
+			{
+				if(oglDraw) oglDraw->setDrawBuffer(mode);
+			}
+
+			void setReadBuffer(GLenum mode)
+			{
+				if(oglDraw) oglDraw->setReadBuffer(mode);
+			}
 
 		protected:
 
@@ -49,7 +78,7 @@ namespace vglserver
 			{
 				public:
 
-					OGLDrawable(int width, int height, VGLFBConfig config);
+					OGLDrawable(Display *dpy, int width, int height, VGLFBConfig config);
 					OGLDrawable(int width, int height, int depth, VGLFBConfig config,
 						const int *attribs);
 					~OGLDrawable(void);
@@ -65,19 +94,28 @@ namespace vglserver
 					int getHeight(void) { return height; }
 					int getDepth(void) { return depth; }
 					int getRGBSize(void) { return rgbSize; }
-					VGLFBConfig getConfig(void) { return config; }
+					VGLFBConfig getFBConfig(void) { return config; }
+					int getFBO(void) { return fbo; }
+
 					void clear(void);
 					void swap(void);
+					void makeCurrent(bool draw, bool read);
 					bool isStereo(void) { return stereo; }
 					GLenum getFormat(void) { return glFormat; }
-					XVisualInfo *getVisual(void);
+					bool drawingToFront(void);
+					bool drawingToRight(void);
+					void setDrawBuffer(GLenum mode);
+					void setReadBuffer(GLenum mode);
 
 				private:
 
 					void setVisAttribs(void);
+					void createBuffers(void);
 
-					bool cleared, stereo;
+					bool cleared, stereo, doubleBuffer;
 					GLXDrawable glxDraw;
+					GLuint fbo, rboc[4], rbod;
+					Display *dpy;
 					int width, height, depth, rgbSize;
 					VGLFBConfig config;
 					GLenum glFormat;
@@ -103,6 +141,7 @@ namespace vglserver
 			bool usePBO;
 			bool alreadyPrinted, alreadyWarned, alreadyWarnedRenderMode;
 			const char *ext;
+			unsigned long eventMask;
 	};
 }
 

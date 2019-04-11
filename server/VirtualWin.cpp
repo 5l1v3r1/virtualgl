@@ -78,7 +78,7 @@ VirtualWin::VirtualWin(Display *dpy_, Window win) :
 			vglout.println("[VGL] Selecting structure notify events in window 0x%.8x",
 				win);
 	}
-	stereoVisual = glxvisual::visAttrib2D(dpy, DefaultScreen(dpy),
+	stereoVisual = glxvisual::visAttrib(dpy, DefaultScreen(dpy),
 		xwa.visual->visualid, GLX_STEREO);
 }
 
@@ -265,7 +265,7 @@ void VirtualWin::readback(GLint drawBuf, bool spoilLast, bool sync)
 
 	if(isStereo() && stereoMode != RRSTEREO_LEYE && stereoMode != RRSTEREO_REYE)
 	{
-		if(DrawingToRight() || rdirty) doStereo = true;
+		if(drawingToRight() || rdirty) doStereo = true;
 		rdirty = false;
 		if(doStereo && compress == RRCOMP_YUV && strlen(fconfig.transport) == 0)
 		{

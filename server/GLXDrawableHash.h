@@ -15,12 +15,20 @@
 #ifndef __GLXDRAWABLEHASH_H__
 #define __GLXDRAWABLEHASH_H__
 
-#include <GL/glx.h>
 #include <X11/Xlib.h>
+#include "glxvisual.h"
 #include "Hash.h"
 
 
-#define HASH  Hash<GLXDrawable, void *, Display *>
+typedef struct
+{
+	Display *dpy;
+	VGLFBConfig config;
+	unsigned long eventMask;
+} GLXDrawableAttribs;
+
+
+#define HASH  Hash<GLXDrawable, void *, GLXDrawableAttribs *>
 
 // This maps a GLXDrawable instance to a (remote) Display handle.
 // Used primarily to make glXGetCurrentDisplay() work properly :/
@@ -43,16 +51,45 @@ namespace vglserver
 
 			static bool isAlloc(void) { return instance != NULL; }
 
-			void add(GLXDrawable draw, Display *dpy)
+			void add(GLXDrawable draw, Display *dpy, VGLFBConfig config)
 			{
 				if(!draw || !dpy) THROW("Invalid argument");
-				HASH::add(draw, NULL, dpy);
+				GLXDrawableAttribs *attribs = new GLXDrawableAttribs;
+				attribs->dpy = dpy;
+				attribs->config = config;
+				attribs->eventMask = 0;
+				HASH::add(draw, NULL, attribs);
 			}
 
 			Display *getCurrentDisplay(GLXDrawable draw)
 			{
 				if(!draw) THROW("Invalid argument");
-				return HASH::find(draw, NULL);
+				GLXDrawableAttribs *attribs = HASH::find(draw, NULL);
+				if(attribs) return attribs->dpy;
+				return NULL;
+			}
+
+			VGLFBConfig getFBConfig(GLXDrawable draw)
+			{
+				if(!draw) THROW("Invalid argument");
+				GLXDrawableAttribs *attribs = HASH::find(draw, NULL);
+				if(attribs) return attribs->config;
+				return NULL;
+			}
+
+			void setEventMask(GLXDrawable draw, unsigned long eventMask)
+			{
+				if(!draw) THROW("Invalid argument");
+				GLXDrawableAttribs *attribs = HASH::find(draw, NULL);
+				if(attribs) attribs->eventMask = eventMask;
+			}
+
+			unsigned long getEventMask(GLXDrawable draw)
+			{
+				if(!draw) THROW("Invalid argument");
+				GLXDrawableAttribs *attribs = HASH::find(draw, NULL);
+				if(attribs) return attribs->eventMask;
+				return 0;
 			}
 
 			void remove(GLXDrawable draw)
@@ -68,14 +105,19 @@ namespace vglserver
 				HASH::kill();
 			}
 
-			Display *attach(GLXDrawable key1, void *key2) { return NULL; }
+			GLXDrawableAttribs *attach(GLXDrawable key1, void *key2) { return NULL; }
 
 			bool compare(GLXDrawable key1, void *key2, HashEntry *entry)
 			{
 				return false;
 			}
 
-			void detach(HashEntry *entry) {}
+			void detach(HashEntry *entry)
+			{
+				GLXDrawableAttribs *attribs =
+					entry ? (GLXDrawableAttribs *)entry->value : NULL;
+				if(attribs) delete attribs;
+			}
 
 			static GLXDrawableHash *instance;
 			static vglutil::CriticalSection instanceMutex;

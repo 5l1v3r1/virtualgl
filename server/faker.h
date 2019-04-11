@@ -15,11 +15,11 @@
 #ifndef __FAKER_H__
 #define __FAKER_H__
 
+#include <X11/Xmd.h>
 #include <X11/Xlib.h>
 #include "Error.h"
 #include "Log.h"
 #include "Mutex.h"
-#include <GL/glx.h>
 #include "fakerconfig.h"
 #include "vglutil.h"
 
@@ -63,7 +63,7 @@ namespace vglfaker
 
 		if(!dpy) return false;
 		// The 3D X server may have its own extensions that conflict with ours.
-		if(dpy == dpy3D) return true;
+		if(!fconfig.egl && dpy == dpy3D) return true;
 		extData = XFindOnExtensionList(XEHeadOfExtensionList(obj), 1);
 		ERRIFNOT(extData);
 		ERRIFNOT(extData->private_data);
@@ -79,7 +79,7 @@ namespace vglfaker
 		XExtData *extData;
 
 		// The 3D X server may have its own extensions that conflict with ours.
-		if(dpy == dpy3D)
+		if(!fconfig.egl && dpy == dpy3D)
 			THROW("vglfaker::getDisplayCS() called with 3D X server handle (this should never happen)");
 		extData = XFindOnExtensionList(XEHeadOfExtensionList(obj), 2);
 		ERRIFNOT(extData);
@@ -88,7 +88,7 @@ namespace vglfaker
 		return *(vglutil::CriticalSection *)extData->private_data;
 	}
 
-	extern void sendGLXError(unsigned short minorCode, unsigned char errorCode,
+	extern void sendGLXError(Display *dpy, CARD16 minorCode, CARD8 errorCode,
 		bool x11Error);
 }
 

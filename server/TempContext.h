@@ -32,25 +32,20 @@ namespace vglserver
 	{
 		public:
 
-			TempContext(Display *dpy, GLXDrawable draw, GLXDrawable read,
-				GLXContext ctx = _glXGetCurrentContext(), VGLFBConfig config = NULL,
-				int renderType = 0) : olddpy(_glXGetCurrentDisplay()),
-				oldctx(_glXGetCurrentContext()), newctx(NULL),
-				oldread(_glXGetCurrentReadDrawable()),
-				olddraw(_glXGetCurrentDrawable()), ctxChanged(false)
+			TempContext(Display *dpy_, GLXDrawable draw, GLXDrawable read,
+				GLXContext ctx, VGLFBConfig config) : dpy(dpy_),
+				oldctx(VGLGetCurrentContext()), newctx(NULL),
+				oldread(VGLGetCurrentReadDrawable()),
+				olddraw(VGLGetCurrentDrawable()), ctxChanged(false)
 			{
-				if(!dpy) return;
-				if(!olddpy) olddpy = dpy;
 				if(read == EXISTING_DRAWABLE) read = oldread;
 				if(draw == EXISTING_DRAWABLE) draw = olddraw;
-				if(draw && read && !ctx && config && renderType)
-					newctx = ctx =
-						_glXCreateNewContext(dpy, GLXFBC(config), renderType, NULL, True);
-				if(((read || draw) && ctx && dpy)
-					&& (oldread != read  || olddraw != draw || oldctx != ctx
-						|| olddpy != dpy))
+				if(draw && read && !ctx && config)
+					newctx = ctx = VGLCreateContext(dpy, config, NULL, True, NULL);
+				if(((read || draw) && ctx)
+					&& (oldread != read  || olddraw != draw || oldctx != ctx))
 				{
-					if(!_glXMakeContextCurrent(dpy, draw, read, ctx))
+					if(!VGLMakeCurrent(dpy, draw, read, ctx))
 						THROW("Could not bind OpenGL context to window (window may have disappeared)");
 					// If oldctx has already been destroyed, then we don't want to
 					// restore it.  This can happen if the application is rendering to
@@ -65,12 +60,12 @@ namespace vglserver
 			{
 				if(ctxChanged)
 				{
-					_glXMakeContextCurrent(olddpy, olddraw, oldread, oldctx);
+					VGLMakeCurrent(dpy, olddraw, oldread, oldctx);
 					ctxChanged = false;
 				}
 				if(newctx)
 				{
-					_glXDestroyContext(olddpy, newctx);  newctx = NULL;
+					VGLDestroyContext(dpy, newctx);  newctx = NULL;
 				}
 			}
 
@@ -81,7 +76,7 @@ namespace vglserver
 
 		private:
 
-			Display *olddpy;
+			Display *dpy;
 			GLXContext oldctx, newctx;
 			GLXDrawable oldread, olddraw;
 			bool ctxChanged;

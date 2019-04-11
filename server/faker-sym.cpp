@@ -21,6 +21,8 @@
 
 static void *gldllhnd = NULL;
 static void *loadGLSymbol(const char *, bool);
+static void *egldllhnd = NULL;
+static void *loadEGLSymbol(const char *, bool);
 #ifdef FAKEOPENCL
 static void *ocldllhnd = NULL;
 static void *loadOCLSymbol(const char *, bool);
@@ -68,6 +70,8 @@ void *loadSymbol(const char *name, bool optional)
 	}
 	if(!strncmp(name, "gl", 2))
 		return loadGLSymbol(name, optional);
+	else if(!strncmp(name, "egl", 3))
+		return loadEGLSymbol(name, optional);
 	#ifdef FAKEOPENCL
 	else if(!strncmp(name, "cl", 2))
 		return loadOCLSymbol(name, optional);
@@ -169,6 +173,72 @@ static void *loadGLSymbol(const char *name, bool optional)
 			optional ? "WARNING" : "ERROR", name);
 		if(strlen(fconfig.gllib) > 0)
 			vglout.print(" from %s", fconfig.gllib);
+		vglout.print("\n");
+	}
+	return sym;
+}
+
+
+static void *loadEGLSymbol(const char *name, bool optional)
+{
+	char *err = NULL;
+
+	if(!__eglGetProcAddress)
+	{
+		if(strlen(fconfig.egllib) > 0)
+		{
+			dlerror();  // Clear error state
+			void *dllhnd = _vgl_dlopen(fconfig.egllib, RTLD_LAZY);
+			err = dlerror();
+			if(!dllhnd)
+			{
+				vglout.print("[VGL] ERROR: Could not open %s\n", fconfig.egllib);
+				if(err) vglout.print("[VGL]    %s\n", err);
+				return NULL;
+			}
+			egldllhnd = dllhnd;
+		}
+		else egldllhnd = RTLD_NEXT;
+
+		dlerror();  // Clear error state
+		__eglGetProcAddress =
+			(_eglGetProcAddressType)dlsym(egldllhnd, "eglGetProcAddress");
+		err = dlerror();
+
+		if(!__eglGetProcAddress)
+		{
+			vglout.print("[VGL] ERROR: Could not load EGL functions");
+			if(strlen(fconfig.egllib) > 0)
+				vglout.print(" from %s", fconfig.egllib);
+			vglout.print("\n");
+			if(err) vglout.print("[VGL]    %s\n", err);
+			return NULL;
+		}
+	}
+
+	void *sym = NULL;
+	if(!strcmp(name, "eglGetProcAddress"))
+		sym = (void *)__eglGetProcAddress;
+	else
+	{
+		if(fconfig.dlsymloader)
+		{
+			dlerror();  // Clear error state
+			sym = dlsym(egldllhnd, (char *)name);
+			err = dlerror();
+		}
+		else
+		{
+			sym = (void *)__eglGetProcAddress(name);
+		}
+	}
+
+	if(!sym && (fconfig.verbose || !optional))
+	{
+		vglout.print("[VGL] %s: Could not load function \"%s\"",
+			optional ? "WARNING" : "ERROR", name);
+		if(strlen(fconfig.egllib) > 0)
+			vglout.print(" from %s", fconfig.egllib);
 		vglout.print("\n");
 	}
 	return sym;
@@ -338,6 +408,7 @@ namespace vglfaker {
 void unloadSymbols(void)
 {
 	if(gldllhnd && gldllhnd != RTLD_NEXT) dlclose(gldllhnd);
+	if(egldllhnd && egldllhnd != RTLD_NEXT) dlclose(egldllhnd);
 	#ifdef FAKEOPENCL
 	if(ocldllhnd && ocldllhnd != RTLD_NEXT) dlclose(ocldllhnd);
 	#endif

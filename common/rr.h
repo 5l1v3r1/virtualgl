@@ -168,6 +168,8 @@ typedef struct _FakerConfig
   char defaultfbconfig[MAXSTR];
   char dlsymloader;
   char drawable;
+  char egl;
+  char egllib[MAXSTR];
   double flushdelay;
   int forcealpha;
   double fps;

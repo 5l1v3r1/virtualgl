@@ -306,6 +306,9 @@ include(FindX11)
 # than the GLVND OpenGL library.  This shuts up CMake 3.11 and later.
 set(OpenGL_GL_PREFERENCE LEGACY)
 include(FindOpenGL)
+if(VGL_BUILDSERVER)
+	string(REGEX REPLACE "libGL" "libEGL" OPENGL_egl_LIBRARY ${OPENGL_gl_LIBRARY})
+endif()
 
 # Ensure that we build and link against the X11 version of OpenGL on OS X
 if(APPLE)
