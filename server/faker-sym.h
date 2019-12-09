@@ -695,8 +695,6 @@ VFUNCDEF2(glDeleteFramebuffers, GLsizei, n, const GLuint *, framebuffers,
 VFUNCDEF2(glDeleteRenderbuffers, GLsizei, n, const GLuint *, renderbuffers,
 	NULL)
 
-VFUNCDEF2(glDrawBuffers, GLsizei, n, GLenum *, bufs, NULL)
-
 VFUNCDEF0(glEndList, NULL)
 
 VFUNCDEF4(glFramebufferRenderbuffer, GLenum, target, GLenum, attachment,

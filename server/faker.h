@@ -93,6 +93,7 @@ namespace vglfaker
 }
 
 #define DPY3D  vglfaker::init3D()
+#define EDPY  ((EGLDisplay)vglfaker::init3D())
 
 #define IS_EXCLUDED(dpy) \
 	(vglfaker::deadYet || vglfaker::getFakerLevel() > 0 \

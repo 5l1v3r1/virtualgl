@@ -114,14 +114,10 @@ namespace vglserver
 
 					bool cleared, stereo, doubleBuffer;
 					GLXDrawable glxDraw;
-					GLuint fbo, rboc[4], rbod;
 					Display *dpy;
 					int width, height, depth, rgbSize;
 					VGLFBConfig config;
 					GLenum glFormat;
-					Pixmap pm;
-					Window win;
-					bool isPixmap;
 			};
 
 			void readPixels(GLint x, GLint y, GLint width, GLint pitch, GLint height,

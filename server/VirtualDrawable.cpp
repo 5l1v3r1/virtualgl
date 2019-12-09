@@ -71,8 +71,7 @@ static Window create_window(Display *dpy, XVisualInfo *vis, int width,
 VirtualDrawable::OGLDrawable::OGLDrawable(Display *dpy_, int width_,
 	int height_, VGLFBConfig config_) : cleared(false), stereo(false),
 	doubleBuffer(false), glxDraw(0), fbo(0), rbod(0), dpy(dpy_), width(width_),
-	height(height_), depth(0), config(config_), glFormat(0), pm(0), win(0),
-	isPixmap(false)
+	height(height_), depth(0), config(config_), glFormat(0)
 {
 	for(int i = 0; i < 4; i++) rboc[i] = 0;
 
@@ -89,43 +88,6 @@ VirtualDrawable::OGLDrawable::OGLDrawable(Display *dpy_, int width_,
 	glxDraw = VGLCreatePbuffer(dpy, config, pbattribs);
 	if(!glxDraw) THROW("Could not create Pbuffer");
 
-	setVisAttribs();
-}
-
-
-// Pixmap constructor
-
-VirtualDrawable::OGLDrawable::OGLDrawable(int width_, int height_, int depth_,
-	VGLFBConfig config_, const int *attribs) : cleared(false), stereo(false),
-	glxDraw(0), width(width_), height(height_), depth(depth_), config(config_),
-	glFormat(0), pm(0), win(0), isPixmap(true)
-{
-	if(!config_ || width_ < 1 || height_ < 1 || depth_ < 0)
-		THROW("Invalid argument");
-
-	XVisualInfo *vis = NULL;
-	if((vis = _glXGetVisualFromFBConfig(DPY3D, GLXFBC(config))) == NULL)
-		goto bailout;
-	win = create_window(DPY3D, vis, 1, 1);
-	if(!win) goto bailout;
-	pm = XCreatePixmap(DPY3D, win, width, height,
-		depth > 0 ? depth : vis->depth);
-	if(!pm) goto bailout;
-	XFree(vis);
-	glxDraw = _glXCreatePixmap(DPY3D, GLXFBC(config), pm, attribs);
-	if(!glxDraw) goto bailout;
-
-	setVisAttribs();
-	return;
-
-	bailout:
-	if(vis) XFree(vis);
-	THROW("Could not create GLX pixmap");
-}
-
-
-void VirtualDrawable::OGLDrawable::setVisAttribs(void)
-{
 	if(glxvisual::getFBConfigAttrib(dpy, config, GLX_STEREO))
 		stereo = true;
 	rgbSize = glxvisual::getFBConfigAttrib(dpy, config, GLX_RED_SIZE) +
@@ -149,29 +111,16 @@ void VirtualDrawable::OGLDrawable::setVisAttribs(void)
 
 VirtualDrawable::OGLDrawable::~OGLDrawable(void)
 {
-	if(isPixmap)
+	VGLDestroyPbuffer(DPY3D, glxDraw);
+	glxDraw = 0;
+	if(fconfig.egl)
 	{
-		if(glxDraw)
+		if(rbod) { _glDeleteRenderbuffers(1, &rbod);  rbod = 0; }
+		for(int i = 0; i < 4; i++)
 		{
-			_glXDestroyPixmap(DPY3D, glxDraw);
-			glxDraw = 0;
+			if(rboc[i]) { _glDeleteRenderbuffers(1, &rboc[i]);  rboc[i] = 0; }
 		}
-		if(pm) { XFreePixmap(DPY3D, pm);  pm = 0; }
-		if(win) { _XDestroyWindow(DPY3D, win);  win = 0; }
-	}
-	else
-	{
-		VGLDestroyPbuffer(DPY3D, glxDraw);
-		glxDraw = 0;
-		if(fconfig.egl)
-		{
-			if(rbod) { _glDeleteRenderbuffers(1, &rbod);  rbod = 0; }
-			for(int i = 0; i < 4; i++)
-			{
-				if(rboc[i]) { _glDeleteRenderbuffers(1, &rboc[i]);  rboc[i] = 0; }
-			}
-			if(fbo) { _glDeleteFramebuffers(1, &fbo);  fbo = 0; }
-		}
+		if(fbo) { _glDeleteFramebuffers(1, &fbo);  fbo = 0; }
 	}
 }
 

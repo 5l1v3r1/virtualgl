@@ -167,8 +167,8 @@ GLXContext VGLCreateContext(Display *dpy, VGLFBConfig config, GLXContext share,
 				}
 			}
 		}
-		GLXContext ctx = (GLXContext)_eglCreateContext((EGLDisplay)DPY3D,
-			EGLFBC(config), (EGLContext)share, egli ? eglAttribs : NULL);
+		GLXContext ctx = (GLXContext)_eglCreateContext(EDPY, EGLFBC(config),
+			(EGLContext)share, egli ? eglAttribs : NULL);
 		CheckEGLErrors(dpy, egli ? X_GLXCreateContextAttribsARB :
 			X_GLXCreateNewContext);
 		return ctx;
@@ -217,12 +217,78 @@ GLXPbuffer VGLCreatePbuffer(Display *dpy, VGLFBConfig config,
 				}
 			}
 		}
-		GLXPbuffer ret = (GLXPbuffer)_eglCreatePbufferSurface((EGLDisplay)DPY3D,
-			EGLFBC(config), egli ? eglAttribs : NULL);
+		GLXPbuffer ret = (GLXPbuffer)_eglCreatePbufferSurface(EDPY, EGLFBC(config),
+			egli ? eglAttribs : NULL);
 		CheckEGLErrors(dpy, X_GLXCreatePbuffer);
 		return ret;
 	}
 	else return _glXCreatePbuffer(DPY3D, GLXFBC(config), glxAttribs);
+}
+
+
+void VGLDestroyContext(Display *dpy, GLXContext ctx)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		_eglDestroyContext(EDPY, (EGLContext)ctx);
+		CheckEGLErrors(dpy, X_GLXDestroyContext);
+	}
+	else
+		_glXDestroyContext(DPY3D, ctx);
+}
+
+
+void VGLDestroyPbuffer(Display *dpy, GLXPbuffer pbuf)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		_eglDestroySurface(EDPY, (EGLSurface)pbuf);
+		CheckEGLErrors(dpy, X_GLXDestroyPbuffer);
+	}
+	else _glXDestroyPbuffer(DPY3D, pbuf);
+}
+
+
+GLXContext VGLGetCurrentContext(void)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		return (GLXContext)_eglGetCurrentContext();
+	}
+	else
+		return _glXGetCurrentContext();
+}
+
+
+GLXDrawable VGLGetCurrentDrawable(void)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		return (GLXDrawable)_eglGetCurrentSurface(EGL_DRAW);
+	}
+	else
+		return _glXGetCurrentDrawable();
+}
+
+
+GLXDrawable VGLGetCurrentReadDrawable(void)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		return (GLXDrawable)_eglGetCurrentSurface(EGL_READ);
+	}
+	else
+		return _glXGetCurrentReadDrawable();
 }
 
 
@@ -295,19 +361,19 @@ int VGLGetFBConfigAttrib(Display *dpy, VGLFBConfig config, int attribute,
 				return Success;
 			case GLX_MAX_PBUFFER_WIDTH:
 			{
-				int ret = _eglGetConfigAttrib((EGLDisplay)DPY3D, EGLFBC(config),
+				int ret = _eglGetConfigAttrib(EDPY, EGLFBC(config),
 					EGL_MAX_PBUFFER_WIDTH, value);
 				return ret == EGL_TRUE ? Success : CheckEGLErrors_NonFatal();
 			}
 			case GLX_MAX_PBUFFER_HEIGHT:
 			{
-				int ret = _eglGetConfigAttrib((EGLDisplay)DPY3D, EGLFBC(config),
+				int ret = _eglGetConfigAttrib(EDPY, EGLFBC(config),
 					EGL_MAX_PBUFFER_HEIGHT, value);
 				return ret == EGL_TRUE ? Success : CheckEGLErrors_NonFatal();
 			}
 			case GLX_MAX_PBUFFER_PIXELS:
 			{
-				int ret = _eglGetConfigAttrib((EGLDisplay)DPY3D, EGLFBC(config),
+				int ret = _eglGetConfigAttrib(EDPY, EGLFBC(config),
 					EGL_MAX_PBUFFER_PIXELS, value);
 				return ret == EGL_TRUE ? Success : CheckEGLErrors_NonFatal();
 			}
@@ -316,6 +382,32 @@ int VGLGetFBConfigAttrib(Display *dpy, VGLFBConfig config, int attribute,
 		}
 	}  // fconfig.egl
 	else return _glXGetFBConfigAttrib(DPY3D, GLXFBC(config), attribute, value);
+}
+
+
+Bool VGLIsDirect(GLXContext ctx)
+{
+	if(fconfig.egl)
+		return True;
+	else
+		return _glXIsDirect(DPY3D, ctx);
+}
+
+
+Bool VGLMakeCurrent(Display *dpy, GLXDrawable draw, GLXDrawable read,
+	GLXContext ctx)
+{
+	if(fconfig.egl)
+	{
+		if(!_eglBindAPI(EGL_OPENGL_API))
+			THROW("Could not enable OpenGL API");
+		EGLBoolean ret = (Bool)_eglMakeCurrent(EDPY, (EGLSurface)draw,
+			(EGLSurface)read, (EGLContext)ctx);
+		CheckEGLErrors(dpy, X_GLXMakeContextCurrent);
+		return ret;
+	}
+	else
+		return _glXMakeContextCurrent(DPY3D, draw, read, ctx);
 }
 
 

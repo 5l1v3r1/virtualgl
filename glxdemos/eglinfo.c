@@ -539,18 +539,18 @@ print_config_attribs_short(const struct config_attribs *attribs)
           );
 
    printf(" ");
-   if (attribs->surfaceType & EGL_PBUFFER_BIT)
-      printf("P");
-   else
-      printf(".");
-   if (attribs->surfaceType & EGL_PIXMAP_BIT) {
+   if (attribs->surfaceType & EGL_PBUFFER_BIT) {
       if (attribs->bindToTextureRGBA)
          printf("A");
       else if (attribs->bindToTextureRGB)
          printf("R");
       else
-         printf("X");
+         printf("P");
    } else
+      printf(".");
+   if (attribs->surfaceType & EGL_PIXMAP_BIT)
+      printf("X");
+   else
       printf(".");
    if (attribs->surfaceType & EGL_WINDOW_BIT)
       printf("W");

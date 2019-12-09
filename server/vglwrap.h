@@ -16,13 +16,23 @@
 #ifndef __VGLWRAP_H__
 #define __VGLWRAP_H__
 
-#include "faker.h"
-#include <X11/Xmd.h>
-#include <GL/glxproto.h>
-#include "faker-sym.h"
+#define GL_GLEXT_PROTOTYPES
+#define GLX_GLXEXT_PROTOTYPES
+#include <GL/glx.h>
 
 
 typedef struct _VGLFBConfig *VGLFBConfig;
+
+typedef struct _VGLPbuffer
+{
+	union
+	{
+		GLXPbuffer glx;
+		EGLSurface egl;
+	} pb;
+	// 0 = front left, 1 = back left, 2 = front right, 3 = back right
+	GLuint fbo, rboc[4], rbod;
+} *VGLPbuffer;
 
 
 void CheckEGLErrors(Display *dpy, unsigned short minorCode);
@@ -30,105 +40,28 @@ void CheckEGLErrors(Display *dpy, unsigned short minorCode);
 GLXContext VGLCreateContext(Display *dpy, VGLFBConfig config, GLXContext share,
 	Bool direct, const int *glxAttribs);
 
-GLXPbuffer VGLCreatePbuffer(Display *dpy, VGLFBConfig config,
+VGLPbuffer VGLCreatePbuffer(Display *dpy, VGLFBConfig config,
 	const int *glxAttribs);
+
+void VGLDestroyContext(Display *dpy, GLXContext ctx);
+
+void VGLDestroyPbuffer(Display *dpy, VGLPbuffer pbuf);
+
+GLXContext VGLGetCurrentContext(void);
+
+GLXDrawable VGLGetCurrentDrawable(void);
+
+GLXDrawable VGLGetCurrentReadDrawable(void);
 
 int VGLGetFBConfigAttrib(Display *dpy, VGLFBConfig config, int attribute,
 	int *value);
 
+Bool VGLIsDirect(GLXContext ctx);
+
+Bool VGLMakeCurrent(Display *dpy, GLXDrawable draw, GLXDrawable read,
+	GLXContext ctx);
+
 Bool VGLQueryExtension(Display *dpy, int *majorOpcode, int *eventBase,
 	int *errorBase);
-
-
-static INLINE void VGLDestroyContext(Display *dpy, GLXContext ctx)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		_eglDestroyContext((EGLDisplay)DPY3D, (EGLContext)ctx);
-		CheckEGLErrors(dpy, X_GLXDestroyContext);
-	}
-	else
-		_glXDestroyContext(DPY3D, ctx);
-}
-
-
-static INLINE void VGLDestroyPbuffer(Display *dpy, GLXPbuffer pbuf)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		_eglDestroySurface((EGLDisplay)DPY3D, (EGLSurface)pbuf);
-		CheckEGLErrors(dpy, X_GLXDestroyPbuffer);
-	}
-	else _glXDestroyPbuffer(DPY3D, pbuf);
-}
-
-
-static INLINE GLXContext VGLGetCurrentContext(void)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		return (GLXContext)_eglGetCurrentContext();
-	}
-	else
-		return _glXGetCurrentContext();
-}
-
-
-static INLINE GLXDrawable VGLGetCurrentDrawable(void)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		return (GLXDrawable)_eglGetCurrentSurface(EGL_DRAW);
-	}
-	else
-		return _glXGetCurrentDrawable();
-}
-
-
-static INLINE GLXDrawable VGLGetCurrentReadDrawable(void)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		return (GLXDrawable)_eglGetCurrentSurface(EGL_READ);
-	}
-	else
-		return _glXGetCurrentReadDrawable();
-}
-
-
-static INLINE Bool VGLIsDirect(GLXContext ctx)
-{
-	if(fconfig.egl)
-		return True;
-	else
-		return _glXIsDirect(DPY3D, ctx);
-}
-
-
-static INLINE Bool VGLMakeCurrent(Display *dpy, GLXDrawable draw,
-	GLXDrawable read, GLXContext ctx)
-{
-	if(fconfig.egl)
-	{
-		if(!_eglBindAPI(EGL_OPENGL_API))
-			THROW("Could not enable OpenGL API");
-		EGLBoolean ret = (Bool)_eglMakeCurrent((EGLDisplay)DPY3D, (EGLSurface)draw,
-			(EGLSurface)read, (EGLContext)ctx);
-		CheckEGLErrors(dpy, X_GLXMakeContextCurrent);
-		return ret;
-	}
-	else
-		return _glXMakeContextCurrent(DPY3D, draw, read, ctx);
-}
 
 #endif  // __VGLWRAP_H__

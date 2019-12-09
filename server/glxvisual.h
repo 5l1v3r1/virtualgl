@@ -30,10 +30,13 @@ typedef struct _VGLFBConfig
 	int id, screen, nConfigs;
 	VisualID visualID;
 	GLXAttrib attr;
-	// GLX mode only
-	GLXFBConfig glxConfig;
-	// EGL mode only
-	EGLConfig eglConfig;
+	union
+	{
+		// GLX mode only
+		GLXFBConfig glx;
+		// EGL mode only
+		EGLConfig egl;
+	} cfg;
 	int c_class, depth;
 	int bufSize;  // For sorting purposes only
 } *VGLFBConfig;
@@ -78,8 +81,8 @@ namespace glxvisual
 }
 
 
-#define GLXFBC(c)  ((c) ? (c)->glxConfig : 0)
-#define EGLFBC(c)  ((c) ? (c)->eglConfig : 0)
+#define GLXFBC(c)  ((c) ? (c)->cfg.glx : 0)
+#define EGLFBC(c)  ((c) ? (c)->cfg.egl : 0)
 #define FBCID(c)  ((c) ? (c)->id : 0)
 
 #endif  // __GLXVISUAL_H__

@@ -402,7 +402,7 @@ static VisualID matchVisual2D(Display *dpy, int screen, VGLFBConfig config)
 }
 
 
-static INLINE int getFBConfigAttrib(GLXFBConfig config, int attribute)
+static INLINE int getGLXFBConfigAttrib(GLXFBConfig config, int attribute)
 {
 	int value = 0;
 	_glXGetFBConfigAttrib(DPY3D, config, attribute, &value);
@@ -493,7 +493,7 @@ static void buildCfgAttribTable(Display *dpy, int screen)
 												ca[i].attr.stencilSize = stencil * 8;
 												ca[i].attr.samples = samples;
 
-												ca[i].eglConfig = config;
+												ca[i].cfg.egl = config;
 												ca[i].c_class = c_class;
 												ca[i].depth = depth;
 
@@ -520,26 +520,28 @@ static void buildCfgAttribTable(Display *dpy, int screen)
 
 			for(int i = 0; i < nConfigs; i++)
 			{
-				ca[i].id = getFBConfigAttrib(glxConfigs[i], GLX_FBCONFIG_ID);
+				ca[i].id = getGLXFBConfigAttrib(glxConfigs[i], GLX_FBCONFIG_ID);
 				ca[i].screen = screen;
 				ca[i].nConfigs = nConfigs;
-				ca[i].attr.stereo = getFBConfigAttrib(glxConfigs[i], GLX_STEREO);
-				int drawableType = getFBConfigAttrib(glxConfigs[i], GLX_DRAWABLE_TYPE);
+				ca[i].attr.stereo = getGLXFBConfigAttrib(glxConfigs[i], GLX_STEREO);
+				int drawableType =
+					getGLXFBConfigAttrib(glxConfigs[i], GLX_DRAWABLE_TYPE);
 				if((drawableType & (GLX_PBUFFER_BIT | GLX_WINDOW_BIT))
 					== (GLX_PBUFFER_BIT | GLX_WINDOW_BIT))
 				{
-					ca[i].attr.alphaSize = getFBConfigAttrib(glxConfigs[i],
-						GLX_ALPHA_SIZE);
-					ca[i].attr.stencilSize = getFBConfigAttrib(glxConfigs[i],
-						GLX_STENCIL_SIZE);
-					ca[i].attr.samples = getFBConfigAttrib(glxConfigs[i], GLX_SAMPLES);
+					ca[i].attr.alphaSize =
+						getGLXFBConfigAttrib(glxConfigs[i], GLX_ALPHA_SIZE);
+					ca[i].attr.stencilSize =
+						getGLXFBConfigAttrib(glxConfigs[i], GLX_STENCIL_SIZE);
+					ca[i].attr.samples =
+						getGLXFBConfigAttrib(glxConfigs[i], GLX_SAMPLES);
 				}
 				else
 				{
 					ca[i].attr.alphaSize = ca[i].attr.stencilSize = ca[i].attr.samples =
 						-1;
 				}
-				ca[i].glxConfig = glxConfigs[i];
+				ca[i].cfg.glx = glxConfigs[i];
 			}
 		}
 
@@ -920,7 +922,7 @@ VGLFBConfig *chooseFBConfig(Display *dpy, int screen, const int attribs[],
 		{
 			for(int j = 0; j < caEntries; j++)
 			{
-				if(ca[j].glxConfig == glxConfigs[i])
+				if(ca[j].cfg.glx == glxConfigs[i])
 				{
 					configs[i] = &ca[j];
 					break;
